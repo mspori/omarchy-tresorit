@@ -13,6 +13,11 @@ widget.
 - Start or stop synchronization for individual tresors.
 - Hand account management off to the Tresorit desktop application.
 
+When a synced tresor is switched off, the plugin remembers its former local
+folder so it can safely be switched on again. Cloud-only tresors without a
+known local folder must first be configured in Tresorit; the plugin never
+guesses a sync destination.
+
 ## Requirements
 
 - Omarchy with the Quickshell-based Omarchy Shell plugin system.

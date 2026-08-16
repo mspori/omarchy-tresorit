@@ -14,6 +14,7 @@ widget.
 - Group tresors into synced and not-synced sections.
 - Start or stop the Tresorit daemon.
 - Choose a local folder and start or stop synchronization for individual tresors.
+- Forget a stopped tresor's remembered folder without deleting local or cloud files.
 - Sign in through the Tresorit CLI with password/TOTP or SSO.
 
 When a synced tresor is switched off, the plugin remembers its former local
@@ -52,6 +53,9 @@ omarchy plugin add file:///absolute/path/to/michaelspori.tresorit --enable
 - Use the folder-with-pencil button on a linked or synced tresor to change its
   destination. Active syncs are stopped and restarted, with rollback to the
   previous folder if the new start fails and its safe state can be restored.
+- Use the forget button on a linked but unsynced tresor to remove only the
+  plugin's remembered folder. The folder and all local and cloud files remain
+  untouched; a folder must be chosen again before that tresor can sync.
 - Use the header switch to start or stop the Tresorit daemon. This interrupts
   all Tresorit synchronization and Tresorit Drive; it is separate from the
   per-tresor switches.

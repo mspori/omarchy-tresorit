@@ -28,6 +28,9 @@ Panel {
   property string _folderPickerOutput: ""
   property string _folderPickerError: ""
   property string _confirmSyncError: ""
+  property var pendingForgetTresor: null
+  property string pendingForgetAccountKey: ""
+  property string _confirmForgetError: ""
   property bool _fileReconcilePending: false
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
@@ -286,7 +289,8 @@ Panel {
 
   function chooseSyncFolder(tresor) {
     if (!tresor || !tresorit.running || tresorit.busy
-        || folderPickerProcess.running || confirmSyncProcess.running) return
+        || folderPickerProcess.running || confirmSyncProcess.running
+        || confirmForgetProcess.running) return
     pendingTresor = tresor
     pendingSyncPath = ""
     pendingAccountKey = tresorit.accountKey
@@ -318,6 +322,35 @@ Panel {
     if (!tresorit.installed || !tresorit.running || tresorit.authenticated) return
     root.close()
     tresorit.login()
+  }
+
+  function confirmForgetFolder(tresor) {
+    if (!tresor || tresor.synced === true || String(tresor.linkedPath || "") === ""
+        || !tresorit.running || tresorit.busy || folderPickerProcess.running
+        || confirmSyncProcess.running || confirmForgetProcess.running) return
+    pendingForgetTresor = tresor
+    pendingForgetAccountKey = tresorit.accountKey
+    _confirmForgetError = ""
+    confirmForgetProcess.command = [
+      "zenity",
+      "--question",
+      "--no-markup",
+      "--default-cancel",
+      "--title=Forget linked folder?",
+      "--ok-label=Forget",
+      "--cancel-label=Cancel",
+      "--text=Forget “" + String(tresor.name || "tresor") + "” link to:\n"
+        + String(tresor.linkedPath || "")
+        + "\n\nNo local or cloud files will be deleted. You will need to choose a folder before syncing again."
+    ]
+    root.close()
+    confirmForgetProcess.running = true
+  }
+
+  function clearPendingForget() {
+    pendingForgetTresor = null
+    pendingForgetAccountKey = ""
+    _confirmForgetError = ""
   }
 
   function clearPendingSync() {
@@ -453,6 +486,34 @@ Panel {
     }
   }
 
+  Process {
+    id: confirmForgetProcess
+    running: false
+    command: []
+    stdout: StdioCollector { waitForEnd: true }
+    stderr: StdioCollector {
+      id: confirmForgetStderr
+      waitForEnd: true
+      onStreamFinished: root._confirmForgetError = text
+    }
+    onExited: function(exitCode) {
+      var stderr = String(confirmForgetStderr.text || root._confirmForgetError || "")
+      if (exitCode === 0 && root.pendingForgetTresor) {
+        tresorit.forgetTresorFolder(
+          String(root.pendingForgetTresor.id || ""),
+          root.pendingForgetAccountKey
+        )
+      } else if (exitCode !== 1) {
+        tresorit.rejectAction(
+          tresorit.elide(stderr || "Could not confirm forgetting the linked folder"),
+          "forget-confirmation-failed"
+        )
+      }
+      root.clearPendingForget()
+      root.open()
+    }
+  }
+
   Connections {
     target: tresorit
     function onAuthenticatedChanged() { root.ensureCursor() }
@@ -513,6 +574,11 @@ Panel {
       onActivateRequested: root.activateCursor()
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
+      onDeleteRequested: {
+        if (root.cursorActive && root.focusSection === "rows"
+            && root.rowIndex < root.displayTresors.length)
+          root.confirmForgetFolder(root.displayTresors[root.rowIndex])
+      }
       onTextKey: function(text) {
         if (text === "r" || text === "R") tresorit.refresh()
         else if (text === "l" || text === "L") root.beginLogin()
@@ -903,9 +969,10 @@ Panel {
     property var tresor: null
     property int rowNumber: 0
     readonly property bool synced: tresorit.tresorIsSynced(tresor)
-    readonly property bool canResume: !synced && tresor && tresor.canStart === true
-    readonly property bool linked: synced || (tresor && String(tresor.linkedPath || "") !== "")
+    readonly property bool linked: synced || tresorit.tresorIsLinked(tresor)
+    readonly property bool canResume: !synced && linked && tresor && tresor.canStart === true
     readonly property bool hasToggle: synced || canResume
+    readonly property bool canForget: !synced && tresorit.tresorIsLinked(tresor)
 
     hasCursor: root.cursorActive && root.focusSection === "rows" && root.rowIndex === rowNumber
     current: synced
@@ -915,7 +982,8 @@ Panel {
     MouseArea {
       anchors.left: parent.left
       anchors.right: parent.right
-      anchors.rightMargin: Style.space(tresorRow.hasToggle ? 96 : 58)
+      anchors.rightMargin: Style.space((tresorRow.hasToggle ? 96 : 58)
+        + (tresorRow.canForget ? 30 : 0))
       anchors.top: parent.top
       anchors.bottom: parent.bottom
       hoverEnabled: true
@@ -972,6 +1040,19 @@ Panel {
         Layout.alignment: Qt.AlignVCenter
         onHovered: function(on) { if (on) root.setRowCursor(tresorRow.rowNumber) }
         onClicked: root.chooseSyncFolder(tresorRow.tresor)
+      }
+
+      PanelActionButton {
+        visible: tresorRow.canForget
+        iconText: "󰌸"
+        tooltipText: "Forget linked folder"
+        foreground: root.foreground
+        hoverColor: root.urgent
+        fontFamily: root.fontFamily
+        enabled: tresorit.running && !tresorit.busy
+        Layout.alignment: Qt.AlignVCenter
+        onHovered: function(on) { if (on) root.setRowCursor(tresorRow.rowNumber) }
+        onClicked: root.confirmForgetFolder(tresorRow.tresor)
       }
 
       ToggleSwitch {

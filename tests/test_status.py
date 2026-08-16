@@ -23,6 +23,7 @@ class ParseStatusTests(unittest.TestCase):
         cases = (
             (["status", "--history-limit", "50"], "status"),
             (["login"], "login"),
+            (["forget-path", "folder-id", "account-key"], "forget-path"),
             (["stop"], "stop"),
             (["sync-start", "folder-id"], "sync-start"),
             (["sync-stop", "folder-id"], "sync-stop"),
@@ -520,6 +521,66 @@ class ActionValidationTests(unittest.TestCase):
 
 
 class StateTests(unittest.TestCase):
+    def test_forget_linked_path_removes_only_the_remembered_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            linked = root / "linked"
+            linked.mkdir()
+            local_file = linked / "keep.txt"
+            local_file.write_text("keep", encoding="utf-8")
+            state_file = root / "state" / "sync-paths.json"
+            account = "person@example.test"
+            state = status.empty_state()
+            status.set_remembered_paths(state, account, {"folder-id": str(linked)})
+            bucket = status.account_state(state, account, create=True)
+            bucket["completedFiles"] = [{"fileName": "keep.txt"}]
+            context = (
+                [{"id": "folder-id", "synced": False}],
+                {"folder-id": str(linked)},
+                account,
+                "",
+            )
+
+            with mock.patch.object(status, "STATE_FILE", state_file):
+                with status.state_lock():
+                    status.save_state(state)
+                with mock.patch.object(status, "sync_context", return_value=context):
+                    exit_code = status.forget_linked_path(
+                        "cli", "folder-id", status.account_key(account)
+                    )
+                with status.state_lock():
+                    saved = status.load_state()
+            local_still_exists = local_file.is_file()
+            local_contents = local_file.read_text(encoding="utf-8")
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(status.remembered_paths(saved, account), {})
+        self.assertEqual(
+            status.account_state(saved, account)["completedFiles"],
+            [{"fileName": "keep.txt"}],
+        )
+        self.assertTrue(local_still_exists)
+        self.assertEqual(local_contents, "keep")
+
+    def test_forget_linked_path_rejects_synced_tresor_and_account_change(self):
+        account = "person@example.test"
+        cases = (
+            ([{"id": "folder-id", "synced": True}], status.account_key(account), "Stop syncing"),
+            ([{"id": "folder-id", "synced": False}], "wrong-key", "account changed"),
+        )
+        for tresors, expected_key, message in cases:
+            with self.subTest(message=message):
+                context = (tresors, {"folder-id": "/linked"}, account, "")
+                errors = io.StringIO()
+                with mock.patch.object(status, "sync_context", return_value=context):
+                    with redirect_stderr(errors):
+                        exit_code = status.forget_linked_path(
+                            "cli", "folder-id", expected_key
+                        )
+
+                self.assertEqual(exit_code, 2)
+                self.assertIn(message, errors.getvalue())
+
     def test_version_one_state_is_migrated_without_losing_paths(self):
         key = status.account_key("person@example.test")
         migrated = status.migrate_state(

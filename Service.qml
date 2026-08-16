@@ -29,6 +29,7 @@ Item {
   property string actionTresorStatus: ""
   property int desiredRunning: -1
   property int desiredTresorSync: -1
+  property int desiredTresorLinked: -1
   property var queuedAction: null
 
   readonly property bool active: desiredRunning === -1 ? running : desiredRunning === 1
@@ -107,8 +108,12 @@ Item {
 
     if (actionTresorId !== "" && !actionProcess.running) {
       for (var i = 0; i < tresors.length; i++) {
-        if (String(tresors[i].id || "") === actionTresorId
-            && tresors[i].synced === (desiredTresorSync === 1)) {
+        if (String(tresors[i].id || "") !== actionTresorId) continue
+        var syncReached = desiredTresorSync !== -1
+          && tresors[i].synced === (desiredTresorSync === 1)
+        var linkedReached = desiredTresorLinked !== -1
+          && (String(tresors[i].linkedPath || "") !== "") === (desiredTresorLinked === 1)
+        if (syncReached || linkedReached) {
           clearTresorAction()
           break
         }
@@ -124,6 +129,7 @@ Item {
     actionTresorId = tresorId || ""
     actionTresorStatus = tresorStatus || ""
     desiredTresorSync = desired === undefined ? -1 : desired
+    desiredTresorLinked = -1
     if (statusProcess.running || fileStatusProcess.running) {
       var queuedArguments = []
       for (var i = 0; i < actionArguments.length; i++)
@@ -229,10 +235,34 @@ Item {
     return launched ? "queued" : "busy"
   }
 
+  function forgetTresorFolder(id, expectedAccountKey) {
+    if (!installed) return "not-installed"
+    if (actionBlocked) return rejectAction("Another Tresorit action is already running", "busy")
+    if (!running) return rejectAction("Start Tresorit before forgetting a linked folder", "daemon-stopped")
+    var tresor = findTresor(id)
+    if (!tresor) return rejectAction("That tresor is no longer available", "invalid-target")
+    if (tresor.synced === true)
+      return rejectAction("Stop syncing this tresor before forgetting its folder", "still-synced")
+    if (String(tresor.linkedPath || "") === "") return "unchanged"
+    var accountFingerprint = String(expectedAccountKey || "")
+    if (accountFingerprint === "")
+      return rejectAction("The current Tresorit account could not be verified", "invalid-account")
+    var launched = runAction(
+      ["forget-path", String(tresor.id || ""), accountFingerprint],
+      "Forgetting linked folder…",
+      String(tresor.id || ""),
+      -1,
+      "Forgetting folder…"
+    )
+    if (launched) desiredTresorLinked = 0
+    return launched ? "queued" : "busy"
+  }
+
   function clearTresorAction() {
     actionTresorId = ""
     actionTresorStatus = ""
     desiredTresorSync = -1
+    desiredTresorLinked = -1
   }
 
   function tresorActionStatus(tresor) {
@@ -251,6 +281,13 @@ Item {
     if (String(tresor.id || "") === actionTresorId && desiredTresorSync !== -1)
       return desiredTresorSync === 1
     return tresor.synced === true
+  }
+
+  function tresorIsLinked(tresor) {
+    if (!tresor) return false
+    if (String(tresor.id || "") === actionTresorId && desiredTresorLinked !== -1)
+      return desiredTresorLinked === 1
+    return String(tresor.linkedPath || "") !== ""
   }
 
   function tresorCanToggle(tresor) {

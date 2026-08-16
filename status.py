@@ -781,6 +781,48 @@ def remember_selected_path(account: str, target: str, path: Path) -> None:
         save_state(state)
 
 
+def forget_linked_path(
+    cli: str, target: str | None, expected_account_key: str | None
+) -> int:
+    if target is None:
+        print("A tresor name or id is required", file=sys.stderr)
+        return 2
+    try:
+        safe_target = valid_target(target)
+        tresors, account_paths, account, _drive_mount_path = sync_context(cli)
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 2
+    if account_key(account) != expected_account_key:
+        print("The Tresorit account changed before the folder was forgotten", file=sys.stderr)
+        return 2
+    tresor = next((row for row in tresors if row["id"] == safe_target), None)
+    if tresor is None:
+        print("The requested tresor is not available", file=sys.stderr)
+        return 2
+    if tresor["synced"]:
+        print("Stop syncing this tresor before forgetting its folder", file=sys.stderr)
+        return 2
+    if safe_target not in account_paths:
+        print("This tresor no longer has a linked folder", file=sys.stderr)
+        return 2
+
+    try:
+        with state_lock():
+            state = load_state()
+            paths = remembered_paths(state, account)
+            if safe_target not in paths:
+                print("This tresor no longer has a linked folder", file=sys.stderr)
+                return 2
+            del paths[safe_target]
+            set_remembered_paths(state, account, paths)
+            save_state(state)
+    except OSError as error:
+        print(f"Could not safely forget the linked folder: {error}", file=sys.stderr)
+        return 2
+    return 0
+
+
 def print_cli_result(stdout: str, stderr: str) -> None:
     if stdout:
         print(stdout)
@@ -980,6 +1022,7 @@ def argument_parser() -> argparse.ArgumentParser:
         choices=(
             "status",
             "login",
+            "forget-path",
             "start",
             "stop",
             "sync-start",
@@ -1019,6 +1062,8 @@ def main() -> int:
         return 0
     if arguments.action == "login":
         return interactive_login(cli)
+    if arguments.action == "forget-path":
+        return forget_linked_path(cli, arguments.target, arguments.path)
     return perform_action(
         cli,
         arguments.action,

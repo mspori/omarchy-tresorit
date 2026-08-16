@@ -34,9 +34,9 @@ Item {
   readonly property bool active: desiredRunning === -1 ? running : desiredRunning === 1
   readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 30, 10, 3600)
   readonly property int fileHistoryLimit: intSetting("fileHistoryLimit", 50, 10, 200)
-  readonly property bool actionBlocked: statusProcess.running || actionProcess.running || queuedAction !== null
+  readonly property bool actionBlocked: actionProcess.running || queuedAction !== null
   readonly property bool busy: actionBlocked
-  readonly property bool processBusy: actionBlocked || fileStatusProcess.running
+  readonly property bool processBusy: actionBlocked || statusProcess.running || fileStatusProcess.running
   readonly property string helperPath: localPath(Qt.resolvedUrl("status.py"))
 
   property string _actionOutput: ""
@@ -124,8 +124,11 @@ Item {
     actionTresorId = tresorId || ""
     actionTresorStatus = tresorStatus || ""
     desiredTresorSync = desired === undefined ? -1 : desired
-    if (fileStatusProcess.running) {
-      queuedAction = { "arguments": arguments }
+    if (statusProcess.running || fileStatusProcess.running) {
+      var queuedArguments = []
+      for (var i = 0; i < arguments.length; i++)
+        queuedArguments.push(String(arguments[i]))
+      queuedAction = queuedArguments
       return true
     }
     launchAction(arguments)
@@ -138,10 +141,11 @@ Item {
   }
 
   function launchQueuedAction() {
-    if (queuedAction === null || actionProcess.running || statusProcess.running) return
+    if (queuedAction === null || actionProcess.running
+        || statusProcess.running || fileStatusProcess.running) return
     var pending = queuedAction
     queuedAction = null
-    launchAction(pending.arguments || [])
+    launchAction(pending)
   }
 
   function toggleDaemon() {
@@ -323,6 +327,7 @@ Item {
       root.refreshing = false
       if (exitCode === 0) root.applyStatus(statusStdout.text)
       else root.lastError = root.elide(statusStderr.text || statusStdout.text || "Could not read Tresorit status")
+      root.launchQueuedAction()
     }
   }
 

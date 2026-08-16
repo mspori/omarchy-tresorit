@@ -18,6 +18,20 @@ SPEC.loader.exec_module(status)
 
 
 class ParseStatusTests(unittest.TestCase):
+    def test_cli_argument_shapes_used_by_service(self):
+        parser = status.argument_parser()
+        cases = (
+            (["status", "--history-limit", "50"], "status"),
+            (["stop"], "stop"),
+            (["sync-start", "folder-id"], "sync-start"),
+            (["sync-stop", "folder-id"], "sync-stop"),
+            (["sync-start-at", "folder-id", "/sync/path", "account-key"], "sync-start-at"),
+        )
+        for arguments, expected_action in cases:
+            with self.subTest(arguments=arguments):
+                parsed = parser.parse_args(arguments)
+                self.assertEqual(parsed.action, expected_action)
+
     def test_logged_in_running_account(self):
         parsed = status.parse_status(
             "Tresorit daemon:\trunning\n"

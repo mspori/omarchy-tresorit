@@ -599,7 +599,7 @@ Panel {
         }
         Text {
           Layout.fillWidth: true
-          text: Model.tresorMeta(tresorRow.tresor)
+          text: Model.tresorMeta(tresorRow.tresor, tresorit.tresorActionStatus(tresorRow.tresor))
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption

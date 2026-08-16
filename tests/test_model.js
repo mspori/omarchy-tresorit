@@ -43,3 +43,11 @@ assert.equal(
   Model.tresorMeta({ synced: true, status: "idle", syncPath: "/sync/Projects" }),
   "Synced to “Projects”"
 )
+assert.equal(
+  Model.tresorMeta({ synced: false, linkedPath: "/sync/Projects" }, "Starting sync…"),
+  "Linked to “Projects” · not synced · Starting sync…"
+)
+assert.equal(
+  Model.tresorMeta({ synced: true, filesLeft: 4, syncPath: "/sync/Projects" }, "Stopping sync…"),
+  "Synced to “Projects” · Stopping sync…"
+)

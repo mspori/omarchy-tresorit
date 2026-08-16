@@ -52,7 +52,7 @@ function tresorGroups(tresors) {
   return { synced: synced, notSynced: notSynced }
 }
 
-function tresorMeta(tresor) {
+function tresorMeta(tresor, actionStatus) {
   if (!tresor) return ""
   var syncPath = String(tresor.syncPath || "")
   var linkedPath = String(tresor.linkedPath || syncPath)
@@ -65,6 +65,9 @@ function tresorMeta(tresor) {
   else if (folderName !== "" && tresor.linkedPathUsable === false)
     state = "Previous folder “" + folderName + "” unavailable"
   else if (folderName !== "") state = "Linked to “" + folderName + "” · not synced"
+
+  var activeAction = String(actionStatus || "").trim()
+  if (activeAction !== "") return state + " · " + activeAction
 
   var failures = Math.max(0, Number(tresor.errors || 0))
   var pending = Math.max(0, Number(tresor.filesLeft || 0))

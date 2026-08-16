@@ -23,6 +23,7 @@ Item {
   property string actionStatus: ""
   property string lastError: ""
   property string actionTresorId: ""
+  property string actionTresorStatus: ""
   property int desiredRunning: -1
   property int desiredTresorSync: -1
 
@@ -94,12 +95,13 @@ Item {
     }
   }
 
-  function runAction(arguments, label, tresorId, desired) {
+  function runAction(arguments, label, tresorId, desired, tresorStatus) {
     if (!installed || actionProcess.running || helperPath === "") return false
     _actionOutput = ""
     _actionError = ""
     actionStatus = label || ""
     actionTresorId = tresorId || ""
+    actionTresorStatus = tresorStatus || ""
     desiredTresorSync = desired === undefined ? -1 : desired
     actionProcess.command = ["python3", helperPath].concat(arguments)
     actionProcess.running = true
@@ -154,7 +156,8 @@ Item {
       [enable ? "sync-start" : "sync-stop", targetId],
       enable ? "Starting tresor sync…" : "Stopping tresor sync…",
       targetId,
-      enable ? 1 : 0
+      enable ? 1 : 0,
+      enable ? "Starting sync…" : "Stopping sync…"
     )
     return launched ? "queued" : "busy"
   }
@@ -177,14 +180,22 @@ Item {
       [operation === "move" ? "sync-move" : "sync-start-at", targetId, localFolder, accountFingerprint],
       operation === "move" ? "Moving tresor sync…" : "Starting tresor sync…",
       targetId,
-      1
+      1,
+      operation === "move" ? "Moving sync…" : "Starting sync…"
     )
     return launched ? "queued" : "busy"
   }
 
   function clearTresorAction() {
     actionTresorId = ""
+    actionTresorStatus = ""
     desiredTresorSync = -1
+  }
+
+  function tresorActionStatus(tresor) {
+    if (actionTresorId === "" || String((tresor && tresor.id) || "") !== actionTresorId)
+      return ""
+    return actionTresorStatus
   }
 
   function tresorIsBusy(tresor) {

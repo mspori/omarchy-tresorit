@@ -735,7 +735,6 @@ Panel {
 
                     PanelSectionHeader {
                       visible: parent.parent.startsSection
-                      height: visible ? implicitHeight : 0
                       text: parent.parent.index < root.syncedTresors.length ? "SYNCED" : "NOT SYNCED"
                       foreground: root.foreground
                       fontFamily: root.fontFamily
@@ -812,7 +811,6 @@ Panel {
 
                     PanelSectionHeader {
                       visible: parent.parent.startsSection
-                      height: visible ? implicitHeight : 0
                       text: parent.parent.transferring ? "SYNCING" : "RECENTLY SYNCED"
                       foreground: root.foreground
                       fontFamily: root.fontFamily

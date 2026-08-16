@@ -33,6 +33,10 @@ Panel {
   readonly property var syncedTresors: tresorGroups.synced || []
   readonly property var notSyncedTresors: tresorGroups.notSynced || []
   readonly property var displayTresors: syncedTresors.concat(notSyncedTresors)
+  onDisplayTresorsChanged: {
+    reconcileTresorRows()
+    ensureCursor()
+  }
   readonly property bool restricted: tresorit.restrictionState !== ""
     && tresorit.restrictionState.toLowerCase() !== "normal"
   readonly property color iconColor: tresorit.errors > 0 || restricted
@@ -70,6 +74,33 @@ Panel {
     if (rowIndex < 0) rowIndex = 0
     if (focusSection === "rows" && rowIndex < displayTresors.length)
       focusedTresorId = String(displayTresors[rowIndex].id || "")
+  }
+
+  function reconcileTresorRows() {
+    var desired = displayTresors
+
+    for (var targetIndex = 0; targetIndex < desired.length; targetIndex++) {
+      var tresor = desired[targetIndex]
+      var stableId = String(tresor.id || "")
+      var currentIndex = -1
+
+      for (var candidateIndex = targetIndex; candidateIndex < tresorRowModel.count; candidateIndex++) {
+        if (String(tresorRowModel.get(candidateIndex).stableId || "") === stableId) {
+          currentIndex = candidateIndex
+          break
+        }
+      }
+
+      if (currentIndex < 0) {
+        tresorRowModel.insert(targetIndex, { "stableId": stableId, "tresor": tresor })
+      } else {
+        if (currentIndex !== targetIndex) tresorRowModel.move(currentIndex, targetIndex, 1)
+        tresorRowModel.setProperty(targetIndex, "tresor", tresor)
+      }
+    }
+
+    while (tresorRowModel.count > desired.length)
+      tresorRowModel.remove(tresorRowModel.count - 1)
   }
 
   function setHeaderCursor() {
@@ -186,6 +217,11 @@ Panel {
     settings: root.settings
   }
 
+  ListModel {
+    id: tresorRowModel
+    dynamicRoles: true
+  }
+
   Process {
     id: folderPickerProcess
     running: false
@@ -268,9 +304,10 @@ Panel {
 
   Connections {
     target: tresorit
-    function onTresorsChanged() { Qt.callLater(root.ensureCursor) }
     function onAuthenticatedChanged() { root.ensureCursor() }
   }
+
+  Component.onCompleted: reconcileTresorRows()
 
   IpcHandler {
     target: root.ipcTarget
@@ -469,9 +506,9 @@ Panel {
               spacing: Style.space(10)
 
               Repeater {
-                model: root.displayTresors
+                model: tresorRowModel
                 Column {
-                  required property var modelData
+                  required property var tresor
                   required property int index
                   width: rowColumn.width
                   spacing: Style.space(10)
@@ -494,7 +531,7 @@ Panel {
 
                   TresorRow {
                     width: parent.width
-                    tresor: parent.modelData
+                    tresor: parent.tresor
                     rowNumber: parent.index
                   }
                 }
@@ -571,7 +608,7 @@ Panel {
       }
 
       PanelActionButton {
-        iconText: tresorRow.linked ? "󰣞" : ""
+        iconText: tresorRow.linked ? "󰣞" : "󰉋"
         tooltipText: tresorit.running
           ? (tresorRow.linked ? "Change the sync folder" : "Choose a local sync folder")
           : "Start Tresorit first"

@@ -43,14 +43,26 @@ function transferSummary(filesLeft, errors) {
 
 function tresorMeta(tresor) {
   if (!tresor) return ""
+  var syncPath = String(tresor.syncPath || "")
+  var linkedPath = String(tresor.linkedPath || syncPath)
+  var folderPath = tresor.synced === true ? syncPath : linkedPath
+  var trimmedPath = folderPath.replace(/\/+$/, "")
+  var parts = trimmedPath.split("/")
+  var folderName = parts.length > 0 ? parts[parts.length - 1] : ""
+  var state = "Not synced on this device"
+  if (tresor.synced === true && folderName !== "") state = "Synced to “" + folderName + "”"
+  else if (folderName !== "" && tresor.linkedPathUsable === false)
+    state = "Previous folder “" + folderName + "” unavailable"
+  else if (folderName !== "") state = "Linked to “" + folderName + "” · not synced"
+
   var failures = Math.max(0, Number(tresor.errors || 0))
   var pending = Math.max(0, Number(tresor.filesLeft || 0))
-  if (failures > 0) return failures + (failures === 1 ? " error" : " errors")
-  if (pending > 0) return pending + (pending === 1 ? " file left" : " files left")
-  if (tresor.synced !== true) return "Not synced on this device"
-  var state = String(tresor.status || "").trim()
-  if (state !== "" && state.toLowerCase() !== "idle") return state
-  return "Synced on this device"
+  if (failures > 0) return state + " · " + failures + (failures === 1 ? " error" : " errors")
+  if (pending > 0) return state + " · " + pending + (pending === 1 ? " file left" : " files left")
+  var transferState = String(tresor.status || "").trim()
+  if (transferState !== "" && transferState.toLowerCase() !== "idle"
+      && transferState.toLowerCase() !== "unknown") return state + " · " + transferState
+  return state
 }
 
 if (typeof module !== "undefined") {

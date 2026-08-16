@@ -71,14 +71,20 @@ class ParseTresorsTests(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         self.assertTrue(rows[0]["synced"])
         self.assertEqual(rows[0]["syncPath"], "/home/me/Tresorit/Projects")
+        self.assertEqual(rows[0]["linkedPath"], "/home/me/Tresorit/Projects")
         self.assertFalse(rows[1]["synced"])
         self.assertEqual(rows[1]["syncPath"], "")
         self.assertFalse(rows[1]["canStart"])
 
     def test_remembered_path_makes_stopped_tresor_restartable(self):
-        rows = status.parse_tresors("Archive\t-\tOwner Two\n", {"Archive": "/old/path"})
+        with tempfile.TemporaryDirectory() as directory:
+            rows = status.parse_tresors(
+                "Archive\t-\tOwner Two\n", {"Archive": directory}
+            )
 
         self.assertTrue(rows[0]["canStart"])
+        self.assertTrue(rows[0]["linkedPathUsable"])
+        self.assertEqual(rows[0]["linkedPath"], directory)
 
     def test_duplicate_names_use_postfixed_ids(self):
         rows = status.parse_tresors(
@@ -300,6 +306,118 @@ class ActionValidationTests(unittest.TestCase):
         self.assertEqual(exit_code, 2)
         self.assertIn("safely remembered", errors.getvalue())
         run.assert_not_called()
+
+    def test_sync_move_stops_remembers_and_starts_new_folder(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old_path = root / "old"
+            new_path = root / "new"
+            old_path.mkdir()
+            new_path.mkdir()
+            state_file = root / "state" / "sync-paths.json"
+            row = {"id": "folder-id", "synced": True, "syncPath": str(old_path)}
+            context = ([row], {"folder-id": str(old_path)}, "account", "")
+            with mock.patch.object(status, "STATE_FILE", state_file):
+                with mock.patch.object(status, "sync_context", return_value=context):
+                    with mock.patch.object(
+                        status,
+                        "run_cli",
+                        side_effect=[(0, "", ""), (0, "", "")],
+                    ) as run:
+                        exit_code = status.perform_action(
+                            "cli",
+                            "sync-move",
+                            "folder-id",
+                            str(new_path),
+                            status.account_key("account"),
+                        )
+                with status.state_lock():
+                    saved = status.remembered_paths(status.load_state(), "account")
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(saved, {"folder-id": str(new_path)})
+        self.assertEqual(
+            run.call_args_list,
+            [
+                mock.call("cli", ["sync", "--stop", "folder-id"]),
+                mock.call(
+                    "cli",
+                    ["sync", "--start", "folder-id", "--path", str(new_path)],
+                ),
+            ],
+        )
+
+    def test_failed_sync_move_restores_previous_folder(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old_path = root / "old"
+            new_path = root / "new"
+            old_path.mkdir()
+            new_path.mkdir()
+            state_file = root / "state" / "sync-paths.json"
+            row = {"id": "folder-id", "synced": True, "syncPath": str(old_path)}
+            context = ([row], {"folder-id": str(old_path)}, "account", "")
+            with mock.patch.object(status, "STATE_FILE", state_file):
+                with mock.patch.object(status, "sync_context", return_value=context):
+                    with mock.patch.object(
+                        status,
+                        "run_cli",
+                        side_effect=[
+                            (0, "", ""),
+                            (1, "", "new start failed"),
+                            (0, "", ""),
+                        ],
+                    ) as run:
+                        errors = io.StringIO()
+                        with redirect_stderr(errors):
+                            exit_code = status.perform_action(
+                                "cli",
+                                "sync-move",
+                                "folder-id",
+                                str(new_path),
+                                status.account_key("account"),
+                            )
+                with status.state_lock():
+                    saved = status.remembered_paths(status.load_state(), "account")
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(saved, {"folder-id": str(old_path)})
+        self.assertEqual(run.call_count, 3)
+        self.assertIn("previous sync was restored", errors.getvalue())
+
+    def test_timed_out_sync_move_does_not_start_competing_rollback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old_path = root / "old"
+            new_path = root / "new"
+            old_path.mkdir()
+            new_path.mkdir()
+            state_file = root / "state" / "sync-paths.json"
+            row = {"id": "folder-id", "synced": True, "syncPath": str(old_path)}
+            context = ([row], {"folder-id": str(old_path)}, "account", "")
+            with mock.patch.object(status, "STATE_FILE", state_file):
+                with mock.patch.object(status, "sync_context", return_value=context):
+                    with mock.patch.object(
+                        status,
+                        "run_cli",
+                        side_effect=[(0, "", ""), (124, "", "timed out")],
+                    ) as run:
+                        errors = io.StringIO()
+                        with redirect_stderr(errors):
+                            exit_code = status.perform_action(
+                                "cli",
+                                "sync-move",
+                                "folder-id",
+                                str(new_path),
+                                status.account_key("account"),
+                            )
+                with status.state_lock():
+                    saved = status.remembered_paths(status.load_state(), "account")
+
+        self.assertEqual(exit_code, 124)
+        self.assertEqual(saved, {"folder-id": str(new_path)})
+        self.assertEqual(run.call_count, 2)
+        self.assertIn("refresh status", errors.getvalue())
 
 
 class StateTests(unittest.TestCase):

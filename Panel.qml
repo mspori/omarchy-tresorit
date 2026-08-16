@@ -19,6 +19,7 @@ Panel {
   property var pendingTresor: null
   property string pendingSyncPath: ""
   property string pendingAccountKey: ""
+  property string pendingFolderOperation: ""
   property string _folderPickerOutput: ""
   property string _folderPickerError: ""
   property string _confirmSyncError: ""
@@ -104,6 +105,7 @@ Panel {
     pendingTresor = tresor
     pendingSyncPath = ""
     pendingAccountKey = tresorit.accountKey
+    pendingFolderOperation = tresor.synced === true ? "move" : "start"
     _folderPickerOutput = ""
     _folderPickerError = ""
     folderPickerProcess.command = [
@@ -127,6 +129,7 @@ Panel {
     pendingTresor = null
     pendingSyncPath = ""
     pendingAccountKey = ""
+    pendingFolderOperation = ""
   }
 
   function scrollCursorIntoView() {
@@ -184,11 +187,14 @@ Panel {
             "--question",
             "--no-markup",
             "--default-cancel",
-            "--title=Start tresor sync?",
-            "--ok-label=Sync",
+            "--title=" + (root.pendingFolderOperation === "move" ? "Change sync folder?" : "Start tresor sync?"),
+            "--ok-label=" + (root.pendingFolderOperation === "move" ? "Move" : "Sync"),
             "--cancel-label=Cancel",
-            "--text=Sync “" + String(root.pendingTresor.name || "tresor") + "” to:\n"
-              + path + "\n\nExisting folder contents can be merged and uploaded."
+            "--text=" + (root.pendingFolderOperation === "move"
+              ? "Move “" + String(root.pendingTresor.name || "tresor") + "” sync to:\n"
+                + path + "\n\nThe current sync will be stopped and restarted. Existing folder contents can be merged and uploaded."
+              : "Sync “" + String(root.pendingTresor.name || "tresor") + "” to:\n"
+                + path + "\n\nExisting folder contents can be merged and uploaded.")
           ]
           confirmSyncProcess.running = true
           return
@@ -217,10 +223,11 @@ Panel {
     onExited: function(exitCode) {
       var stderr = String(confirmSyncStderr.text || root._confirmSyncError || "")
       if (exitCode === 0 && root.pendingTresor && root.pendingSyncPath !== "") {
-        tresorit.startTresorAt(
+        tresorit.setTresorFolder(
           String(root.pendingTresor.id || ""),
           root.pendingSyncPath,
-          root.pendingAccountKey
+          root.pendingAccountKey,
+          root.pendingFolderOperation
         )
       } else if (exitCode !== 1) {
         tresorit.rejectAction(
@@ -465,6 +472,8 @@ Panel {
     property int rowNumber: 0
     readonly property bool synced: tresorit.tresorIsSynced(tresor)
     readonly property bool canResume: !synced && tresor && tresor.canStart === true
+    readonly property bool linked: synced || (tresor && String(tresor.linkedPath || "") !== "")
+    readonly property bool hasToggle: synced || canResume
 
     hasCursor: root.cursorActive && root.focusSection === "rows" && root.rowIndex === rowNumber
     current: synced
@@ -474,7 +483,7 @@ Panel {
     MouseArea {
       anchors.left: parent.left
       anchors.right: parent.right
-      anchors.rightMargin: Style.space(tresorRow.canResume ? 96 : 58)
+      anchors.rightMargin: Style.space(tresorRow.hasToggle ? 96 : 58)
       anchors.top: parent.top
       anchors.bottom: parent.bottom
       hoverEnabled: true
@@ -522,10 +531,9 @@ Panel {
       }
 
       PanelActionButton {
-        visible: !tresorRow.synced
-        iconText: "󰉋"
+        iconText: tresorRow.linked ? "󰣞" : "󰉋"
         tooltipText: tresorit.running
-          ? (tresorRow.canResume ? "Choose a different sync folder" : "Choose a local sync folder")
+          ? (tresorRow.linked ? "Change the sync folder" : "Choose a local sync folder")
           : "Start Tresorit first"
         foreground: root.foreground
         fontFamily: root.fontFamily

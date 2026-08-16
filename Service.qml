@@ -82,7 +82,7 @@ Item {
     filesLeft = Math.max(0, Number(parsed.filesLeft || 0))
     errors = Math.max(0, Number(parsed.errors || 0))
 
-    if (actionTresorId !== "") {
+    if (actionTresorId !== "" && !actionProcess.running) {
       for (var i = 0; i < tresors.length; i++) {
         if (String(tresors[i].id || "") === actionTresorId
             && tresors[i].synced === (desiredTresorSync === 1)) {
@@ -158,21 +158,23 @@ Item {
     return launched ? "queued" : "busy"
   }
 
-  function startTresorAt(id, path, expectedAccountKey) {
+  function setTresorFolder(id, path, expectedAccountKey, confirmedOperation) {
     if (!installed) return "not-installed"
     if (actionProcess.running) return rejectAction("Another Tresorit action is already running", "busy")
     if (!running) return rejectAction("Start Tresorit before choosing a sync folder", "daemon-stopped")
     var tresor = findTresor(id)
-    if (!tresor || tresor.synced === true)
+    if (!tresor)
       return rejectAction("That tresor is no longer available for setup", "invalid-target")
     var targetId = String(tresor.id || tresor.name || "")
     var localFolder = String(path || "")
     var accountFingerprint = String(expectedAccountKey || "")
-    if (targetId === "" || localFolder === "" || accountFingerprint === "")
+    var operation = String(confirmedOperation || "")
+    if (targetId === "" || localFolder === "" || accountFingerprint === ""
+        || (operation !== "start" && operation !== "move"))
       return rejectAction("The selected sync setup is no longer valid", "invalid-target")
     var launched = runAction(
-      ["sync-start-at", targetId, localFolder, accountFingerprint],
-      "Starting tresor sync…",
+      [operation === "move" ? "sync-move" : "sync-start-at", targetId, localFolder, accountFingerprint],
+      operation === "move" ? "Moving tresor sync…" : "Starting tresor sync…",
       targetId,
       1
     )

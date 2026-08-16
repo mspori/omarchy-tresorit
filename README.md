@@ -42,6 +42,9 @@ omarchy plugin add file:///absolute/path/to/michaelspori.tresorit --enable
   to choose its local sync folder.
 - Use the trailing switch to turn synchronization for that tresor on or off.
 - Use the folder button on a cloud-only tresor to select its local sync folder.
+- Use the folder-with-pencil button on a linked or synced tresor to change its
+  destination. Active syncs are stopped and restarted, with rollback to the
+  previous folder if the new start fails and its safe state can be restored.
 - Use the header switch to start or stop the Tresorit daemon. This interrupts
   all Tresorit synchronization and Tresorit Drive; it is separate from the
   per-tresor switches.

@@ -135,18 +135,28 @@ def parse_tresors(
         name = candidate.group("name") if is_duplicate else raw_name
         identifier = candidate.group("id") if is_duplicate else raw_name
         synced = sync_path not in ("", "-")
+        linked_path = sync_path if synced else remembered_paths.get(identifier, "")
+        linked_path_object = Path(linked_path) if linked_path else None
+        linked_path_usable = bool(
+            linked_path_object
+            and linked_path_object.is_absolute()
+            and linked_path_object.is_dir()
+            and os.access(linked_path_object, os.W_OK | os.X_OK)
+        )
         tresors.append(
             {
                 "id": identifier,
                 "name": name,
                 "rawName": raw_name,
                 "syncPath": sync_path if synced else "",
+                "linkedPath": linked_path,
+                "linkedPathUsable": linked_path_usable,
                 "owner": owner if owner != "-" else "",
                 "synced": synced,
                 "status": "",
                 "filesLeft": 0,
                 "errors": 0,
-                "canStart": synced or identifier in remembered_paths,
+                "canStart": synced or linked_path_usable,
                 "canStop": synced and remembered_paths.get(identifier) == sync_path,
             }
         )
@@ -230,8 +240,8 @@ def save_state(state: dict[str, object]) -> None:
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
+        temporary.chmod(0o600)
         os.replace(temporary, STATE_FILE)
-        STATE_FILE.chmod(0o600)
     except Exception:
         try:
             temporary.unlink()
@@ -354,7 +364,7 @@ def collect_status(cli: str) -> dict[str, object]:
         if not state_error:
             for row in tresors:
                 identifier = str(row["id"])
-                row["canStart"] = row["synced"] or identifier in next_paths
+                row["canStart"] = row["synced"] or row["linkedPathUsable"]
                 row["canStop"] = row["synced"] and next_paths.get(identifier) == row["syncPath"]
 
     transfers = parse_transfers(transfers_output) if transfers_exit == 0 else {}
@@ -471,6 +481,13 @@ def remember_selected_path(account: str, target: str, path: Path) -> None:
         save_state(state)
 
 
+def print_cli_result(stdout: str, stderr: str) -> None:
+    if stdout:
+        print(stdout)
+    if stderr:
+        print(stderr, file=sys.stderr)
+
+
 def perform_action(
     cli: str,
     action: str,
@@ -482,7 +499,7 @@ def perform_action(
         "start": ["start"],
         "stop": ["stop"],
     }
-    if action in ("sync-start", "sync-start-at", "sync-stop"):
+    if action in ("sync-start", "sync-start-at", "sync-move", "sync-stop"):
         if target is None:
             print("A tresor name or id is required", file=sys.stderr)
             return 2
@@ -496,13 +513,97 @@ def perform_action(
         except ValueError as error:
             print(error, file=sys.stderr)
             return 2
-        if action == "sync-start-at" and account_key(account) != expected_account_key:
+        if action in ("sync-start-at", "sync-move") and account_key(account) != expected_account_key:
             print("The Tresorit account changed while choosing the sync folder", file=sys.stderr)
             return 2
         tresor = next((row for row in tresors if row["id"] == safe_target), None)
         if tresor is None:
             print("The requested tresor is not available", file=sys.stderr)
             return 2
+        if action == "sync-move":
+            old_path = account_paths.get(safe_target, "")
+            if not tresor["synced"] or not old_path or old_path != tresor["syncPath"]:
+                print(
+                    "The current sync folder could not be safely verified",
+                    file=sys.stderr,
+                )
+                return 2
+            if selected_path is None:
+                print("A new local sync folder is required", file=sys.stderr)
+                return 2
+            try:
+                new_path = validate_sync_path(
+                    selected_path,
+                    tresors,
+                    safe_target,
+                    drive_mount_path,
+                    account_paths,
+                )
+                old_path_resolved = Path(old_path).resolve(strict=True)
+            except (OSError, RuntimeError, ValueError) as error:
+                print(error, file=sys.stderr)
+                return 2
+            if new_path == old_path_resolved:
+                print("Choose a different folder for this tresor", file=sys.stderr)
+                return 2
+
+            stop_exit, stop_stdout, stop_stderr = run_cli(
+                cli, ["sync", "--stop", safe_target]
+            )
+            print_cli_result(stop_stdout, stop_stderr)
+            if stop_exit != 0:
+                return stop_exit
+
+            try:
+                remember_selected_path(account, safe_target, new_path)
+            except OSError as error:
+                rollback_exit, rollback_stdout, rollback_stderr = run_cli(
+                    cli, ["sync", "--start", safe_target, "--path", old_path]
+                )
+                print(
+                    "Could not save the new folder; the previous sync "
+                    + ("was restored" if rollback_exit == 0 else "also could not be restored")
+                    + f": {error}",
+                    file=sys.stderr,
+                )
+                print_cli_result(rollback_stdout, rollback_stderr)
+                return 2
+
+            start_exit, start_stdout, start_stderr = run_cli(
+                cli, ["sync", "--start", safe_target, "--path", str(new_path)]
+            )
+            if start_exit == 0:
+                print_cli_result(start_stdout, start_stderr)
+                return 0
+            if start_exit == 124:
+                print(
+                    "Starting sync in the new folder timed out; refresh status before retrying",
+                    file=sys.stderr,
+                )
+                print_cli_result(start_stdout, start_stderr)
+                return start_exit
+
+            try:
+                remember_selected_path(account, safe_target, old_path_resolved)
+            except OSError as error:
+                print(
+                    "The new sync failed and the previous folder state could not be restored: "
+                    + str(error),
+                    file=sys.stderr,
+                )
+                print_cli_result(start_stdout, start_stderr)
+                return start_exit
+            rollback_exit, rollback_stdout, rollback_stderr = run_cli(
+                cli, ["sync", "--start", safe_target, "--path", str(old_path_resolved)]
+            )
+            print(
+                "Could not start sync in the new folder; the previous sync "
+                + ("was restored" if rollback_exit == 0 else "also could not be restored"),
+                file=sys.stderr,
+            )
+            print_cli_result(start_stdout, start_stderr)
+            print_cli_result(rollback_stdout, rollback_stderr)
+            return start_exit
         if action in ("sync-start", "sync-start-at"):
             if tresor["synced"]:
                 print("The requested tresor is already synced", file=sys.stderr)
@@ -566,10 +667,7 @@ def perform_action(
         command = commands[action]
 
     exit_code, stdout, stderr = run_cli(cli, command)
-    if stdout:
-        print(stdout)
-    if stderr:
-        print(stderr, file=sys.stderr)
+    print_cli_result(stdout, stderr)
     return exit_code
 
 
@@ -585,6 +683,7 @@ def argument_parser() -> argparse.ArgumentParser:
             "stop",
             "sync-start",
             "sync-start-at",
+            "sync-move",
             "sync-stop",
         ),
     )

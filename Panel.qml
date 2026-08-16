@@ -198,7 +198,7 @@ Panel {
           Item {
             id: header
             width: parent.width
-            implicitHeight: hero.implicitHeight + Style.space(8)
+            implicitHeight: hero.implicitHeight
             readonly property bool switchHasCursor: root.cursorActive
               && root.focusSection === "header" && tresorit.installed
 

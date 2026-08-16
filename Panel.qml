@@ -266,14 +266,11 @@ Panel {
 
   function activeFileMeta(file) {
     if (!file) return ""
-    var parts = []
     var tresorName = String(file.tresorName || "").trim()
-    var status = String(file.status || "").trim()
-    var progress = String(file.progress || "").trim()
-    if (tresorName !== "") parts.push(tresorName)
-    if (status !== "" && status !== "-") parts.push(status)
-    if (progress !== "" && progress !== "-" && progress !== status) parts.push(progress)
-    return parts.join(" · ")
+    var status = String(file.status || "").trim().toLowerCase()
+    if (status === "" || status === "-" || status === "unknown") status = "syncing"
+    status = status.replace(/(?:\.\.\.|…)+$/, "") + "…"
+    return (tresorName !== "" ? tresorName + " · " : "") + status
   }
 
   function completedFileMeta(file) {
@@ -804,10 +801,6 @@ Panel {
     property var file: null
     property bool transferring: false
     property int rowNumber: 0
-    readonly property real progressPercent: file && file.progressPercent !== undefined
-      && file.progressPercent !== null && isFinite(Number(file.progressPercent))
-      ? Number(file.progressPercent) : -1
-
     hasCursor: root.cursorActive && root.focusSection === "files" && root.fileRowIndex === rowNumber
     current: transferring
     foreground: root.foreground
@@ -860,21 +853,6 @@ Panel {
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
           elide: Text.ElideRight
-        }
-
-        Rectangle {
-          visible: fileRow.transferring && fileRow.progressPercent >= 0
-          Layout.fillWidth: true
-          Layout.preferredHeight: Style.space(2)
-          color: Qt.rgba(root.dim.r, root.dim.g, root.dim.b, 0.28)
-          radius: height / 2
-
-          Rectangle {
-            width: parent.width * Math.max(0, Math.min(100, fileRow.progressPercent)) / 100
-            height: parent.height
-            color: root.foreground
-            radius: parent.radius
-          }
         }
       }
     }

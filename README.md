@@ -8,7 +8,7 @@ widget.
 
 - Show whether Tresorit is installed, running, and authenticated.
 - Display current transfer activity and sync errors.
-- Show files currently being processed, including Tresorit's status and progress.
+- Show files currently being processed and their Tresorit transfer status.
 - Keep a private, bounded history of files whose completion the plugin observed.
 - List locally available tresors and open their folders.
 - Group tresors into synced and not-synced sections.

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "michaelspori.tresorit",
   "name": "Tresorit",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "author": "Michael Spori",
   "license": "MIT",
   "description": "Tresorit status, transfer activity, and selective tresor sync controls in the Omarchy bar.",

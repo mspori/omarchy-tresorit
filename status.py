@@ -31,7 +31,6 @@ MAX_FILE_HISTORY_LIMIT = 200
 ACTIVE_FILE_STALE_SECONDS = 300
 ACTIVE_FILE_PERSIST_SECONDS = 60
 DISAMBIGUATED_NAME = re.compile(r"^(?P<name>.+) \((?P<id>[^()]+)\)$")
-PERCENT_PROGRESS = re.compile(r"^(?P<value>(?:100(?:\.0+)?|\d{1,2}(?:\.\d+)?))\s*%$")
 
 
 def find_cli() -> str | None:
@@ -305,16 +304,6 @@ def parse_transfers(raw: str) -> dict[str, dict[str, object]]:
     return transfers
 
 
-def parse_progress_percent(progress: str) -> int | float | None:
-    match = PERCENT_PROGRESS.fullmatch(progress.strip())
-    if not match:
-        return None
-    value = float(match.group("value"))
-    if not 0 <= value <= 100:
-        return None
-    return int(value) if value.is_integer() else value
-
-
 def file_key(tresor_id: str, file_name: str) -> str:
     return hashlib.sha256(f"{tresor_id}\0{file_name}".encode("utf-8")).hexdigest()
 
@@ -345,7 +334,7 @@ def tresor_for_transfer(
 
 
 def file_row(
-    tresor: dict[str, object], file_name: str, status_text: str = "", progress: str = ""
+    tresor: dict[str, object], file_name: str, status_text: str = ""
 ) -> dict[str, object]:
     local_path = safe_local_file(str(tresor.get("syncPath", "")), file_name)
     return {
@@ -354,8 +343,6 @@ def file_row(
         "tresorName": str(tresor["name"]),
         "fileName": file_name,
         "status": status_text,
-        "progress": progress,
-        "progressPercent": parse_progress_percent(progress),
         "localPath": local_path,
         "canOpen": bool(local_path),
     }
@@ -365,11 +352,11 @@ def parse_file_transfers(
     raw: str, tresors: list[dict[str, object]]
 ) -> list[dict[str, object]]:
     files: list[dict[str, object]] = []
-    for transfer_name, file_name, status_text, progress in tab_rows(raw, 4):
+    for transfer_name, file_name, status_text, _progress in tab_rows(raw, 4):
         tresor = tresor_for_transfer(tresors, transfer_name)
         if tresor is None or not file_name:
             continue
-        files.append(file_row(tresor, file_name, status_text, progress))
+        files.append(file_row(tresor, file_name, status_text))
     return files
 
 

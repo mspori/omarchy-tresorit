@@ -150,15 +150,7 @@ class ParseTresorsTests(unittest.TestCase):
 
 
 class FileTransferTests(unittest.TestCase):
-    def test_progress_percent_is_only_parsed_from_plain_valid_percentages(self):
-        self.assertEqual(status.parse_progress_percent("42%"), 42)
-        self.assertEqual(status.parse_progress_percent("42.5 %"), 42.5)
-        self.assertEqual(status.parse_progress_percent("100.0%"), 100)
-        for value in ("", "42", "101%", "-1%", "42% done"):
-            with self.subTest(value=value):
-                self.assertIsNone(status.parse_progress_percent(value))
-
-    def test_file_rows_preserve_raw_status_and_progress(self):
+    def test_file_rows_preserve_raw_status(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             local_file = root / "nested" / "report.txt"
@@ -171,8 +163,8 @@ class FileTransferTests(unittest.TestCase):
 
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["status"], "downloading")
-        self.assertEqual(rows[0]["progress"], "37.5%")
-        self.assertEqual(rows[0]["progressPercent"], 37.5)
+        self.assertNotIn("progress", rows[0])
+        self.assertNotIn("progressPercent", rows[0])
         self.assertTrue(rows[0]["canOpen"])
         self.assertEqual(rows[0]["localPath"], str(local_file))
 
@@ -199,7 +191,6 @@ class FileTransferTests(unittest.TestCase):
         )
 
         self.assertEqual(rows[0]["tresorId"], "two")
-        self.assertIsNone(rows[0]["progressPercent"])
 
     def test_ambiguous_duplicate_display_name_is_not_guessed(self):
         tresors = status.parse_tresors(
@@ -561,7 +552,7 @@ class FileHistoryTests(unittest.TestCase):
         }
 
     def active_row(self, name="report.txt"):
-        return status.file_row(self.tresor, name, "uploading", "25%")
+        return status.file_row(self.tresor, name, "uploading")
 
     def test_disappearing_recent_healthy_file_is_recorded(self):
         state = status.empty_state()
@@ -762,8 +753,9 @@ class CollectionTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual(len(result["activeFiles"]), 1)
-        self.assertEqual(result["activeFiles"][0]["progress"], "75%")
-        self.assertEqual(result["activeFiles"][0]["progressPercent"], 75)
+        self.assertEqual(result["activeFiles"][0]["status"], "downloading")
+        self.assertNotIn("progress", result["activeFiles"][0])
+        self.assertNotIn("progressPercent", result["activeFiles"][0])
         self.assertEqual(result["activeFiles"][0]["localPath"], str(local_file))
 
     def test_file_poll_failure_does_not_reconcile_previous_active_state(self):

@@ -193,7 +193,7 @@ Panel {
         Column {
           id: column
           width: panelFlick.width
-          spacing: Style.space(12)
+          spacing: Style.space(14)
 
           Item {
             id: header
@@ -246,6 +246,11 @@ Panel {
             font.family: root.fontFamily
             font.pixelSize: Style.font.bodySmall
             wrapMode: Text.WordWrap
+          }
+
+          PanelSeparator {
+            visible: tresorit.authenticated
+            foreground: root.foreground
           }
 
           CursorSurface {
@@ -312,7 +317,7 @@ Panel {
               id: rowColumn
               visible: tresorit.tresors.length > 0
               width: parent.width
-              spacing: Style.space(5)
+              spacing: Style.space(10)
 
               Repeater {
                 model: tresorit.tresors

@@ -534,7 +534,7 @@ Panel {
         Column {
           id: column
           width: panelFlick.width
-          spacing: Style.space(14)
+          spacing: Style.space(12)
 
           Item {
             id: header
@@ -701,32 +701,51 @@ Panel {
               Repeater {
                 id: tresorRepeater
                 model: tresorRowModel
-                Column {
+                Item {
                   required property var tresor
                   required property int index
                   width: rowColumn.width
-                  spacing: Style.space(10)
                   readonly property bool startsNotSynced: index === root.syncedTresors.length
                   readonly property bool startsSection: index === 0 || startsNotSynced
+                  readonly property real sectionTopGap: startsNotSynced
+                    && root.syncedTresors.length > 0 ? Style.space(4) : 0
+                  implicitHeight: tresorDelegateColumn.implicitHeight + sectionTopGap
 
-                  PanelSeparator {
-                    visible: startsNotSynced && root.syncedTresors.length > 0
-                    height: visible ? implicitHeight : 0
-                    foreground: root.foreground
-                  }
+                  Column {
+                    id: tresorDelegateColumn
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.topMargin: parent.sectionTopGap
+                    spacing: Style.space(10)
 
-                  PanelSectionHeader {
-                    visible: startsSection
-                    height: visible ? implicitHeight : 0
-                    text: index < root.syncedTresors.length ? "SYNCED" : "NOT SYNCED"
-                    foreground: root.foreground
-                    fontFamily: root.fontFamily
-                  }
+                    Item {
+                      visible: parent.parent.startsNotSynced && root.syncedTresors.length > 0
+                      width: parent.width
+                      height: visible ? tresorSectionSeparator.implicitHeight + Style.space(4) : 0
 
-                  TresorRow {
-                    width: parent.width
-                    tresor: parent.tresor
-                    rowNumber: parent.index
+                      PanelSeparator {
+                        id: tresorSectionSeparator
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        foreground: root.foreground
+                      }
+                    }
+
+                    PanelSectionHeader {
+                      visible: parent.parent.startsSection
+                      height: visible ? implicitHeight : 0
+                      text: parent.parent.index < root.syncedTresors.length ? "SYNCED" : "NOT SYNCED"
+                      foreground: root.foreground
+                      fontFamily: root.fontFamily
+                    }
+
+                    TresorRow {
+                      width: parent.width
+                      tresor: parent.parent.tresor
+                      rowNumber: parent.parent.index
+                    }
                   }
                 }
               }
@@ -758,34 +777,53 @@ Panel {
                 id: fileRepeater
                 model: fileRowModel
 
-                Column {
+                Item {
                   required property var file
                   required property int index
                   width: fileRowItems.width
-                  spacing: Style.space(10)
                   readonly property bool startsCompleted: index === root.reconciledActiveFileCount
                   readonly property bool startsSection: index === 0 || startsCompleted
                   readonly property bool transferring: index < root.reconciledActiveFileCount
+                  readonly property real sectionTopGap: startsCompleted
+                    && root.reconciledActiveFileCount > 0 ? Style.space(4) : 0
+                  implicitHeight: fileDelegateColumn.implicitHeight + sectionTopGap
 
-                  PanelSeparator {
-                    visible: startsCompleted && root.reconciledActiveFileCount > 0
-                    height: visible ? implicitHeight : 0
-                    foreground: root.foreground
-                  }
+                  Column {
+                    id: fileDelegateColumn
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.topMargin: parent.sectionTopGap
+                    spacing: Style.space(10)
 
-                  PanelSectionHeader {
-                    visible: startsSection
-                    height: visible ? implicitHeight : 0
-                    text: parent.transferring ? "SYNCING" : "RECENTLY SYNCED"
-                    foreground: root.foreground
-                    fontFamily: root.fontFamily
-                  }
+                    Item {
+                      visible: parent.parent.startsCompleted && root.reconciledActiveFileCount > 0
+                      width: parent.width
+                      height: visible ? fileSectionSeparator.implicitHeight + Style.space(4) : 0
 
-                  FileRow {
-                    width: parent.width
-                    file: parent.file
-                    transferring: parent.transferring
-                    rowNumber: parent.index
+                      PanelSeparator {
+                        id: fileSectionSeparator
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        foreground: root.foreground
+                      }
+                    }
+
+                    PanelSectionHeader {
+                      visible: parent.parent.startsSection
+                      height: visible ? implicitHeight : 0
+                      text: parent.parent.transferring ? "SYNCING" : "RECENTLY SYNCED"
+                      foreground: root.foreground
+                      fontFamily: root.fontFamily
+                    }
+
+                    FileRow {
+                      width: parent.width
+                      file: parent.parent.file
+                      transferring: parent.parent.transferring
+                      rowNumber: parent.parent.index
+                    }
                   }
                 }
               }

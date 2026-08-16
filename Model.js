@@ -67,7 +67,7 @@ function tresorMeta(tresor, actionStatus) {
   else if (folderName !== "") state = "Linked to “" + folderName + "” · not synced"
 
   var activeAction = String(actionStatus || "").trim()
-  if (activeAction !== "") return state + " · " + activeAction
+  if (activeAction !== "") return activeAction
 
   var failures = Math.max(0, Number(tresor.errors || 0))
   var pending = Math.max(0, Number(tresor.filesLeft || 0))

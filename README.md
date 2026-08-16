@@ -10,13 +10,12 @@ widget.
 - Display current transfer activity and sync errors.
 - List locally available tresors and open their folders.
 - Start or stop the Tresorit daemon.
-- Start or stop synchronization for individual tresors.
+- Choose a local folder and start or stop synchronization for individual tresors.
 - Hand account management off to the Tresorit desktop application.
 
 When a synced tresor is switched off, the plugin remembers its former local
-folder so it can safely be switched on again. Cloud-only tresors without a
-known local folder must first be configured in Tresorit; the plugin never
-guesses a sync destination.
+folder so it can safely be switched on again. For a cloud-only tresor, use the
+folder button to choose its local destination; the plugin never guesses one.
 
 ## Installation
 
@@ -42,12 +41,14 @@ omarchy plugin add file:///absolute/path/to/michaelspori.tresorit --enable
 - Click a tresor name to open its local folder, or Tresorit when it has no
   local folder.
 - Use the trailing switch to turn synchronization for that tresor on or off.
+- Use the folder button on a cloud-only tresor to select its local sync folder.
 - Use the header switch to start or stop the Tresorit daemon. This interrupts
   all Tresorit synchronization and Tresorit Drive; it is separate from the
   per-tresor switches.
 
 The panel supports arrow-key navigation, Enter to open the selected tresor,
-`S` to change its sync selection, `R` to refresh, and `O` to open Tresorit.
+`S` to change its sync selection, `F` to choose or change its local folder,
+`R` to refresh, and `O` to open Tresorit.
 
 ### Sync-folder safety
 
@@ -60,14 +61,17 @@ ${XDG_STATE_HOME:-~/.local/state}/omarchy/michaelspori.tresorit/sync-paths.json
 
 The state directory and file are user-private. Account addresses are stored as
 one-way hashes, and paths are scoped by that account and a stable tresor
-identifier. A remembered folder must still
-exist and be writable before the plugin will pass it back to Tresorit. Selecting
-a local folder for a cloud-only tresor remains a task for the Tresorit app.
+identifier. A remembered folder must still exist and be writable before the
+plugin will pass it back to Tresorit. New
+selections are also rejected if they overlap another synced tresor, Tresorit
+Drive, the filesystem root, or the home folder itself. The selected folder is
+shown for confirmation before synchronization starts.
 
 ## Requirements
 
 - Omarchy with the Quickshell-based Omarchy Shell plugin system.
 - Tresorit for Linux with `tresorit-cli` installed.
+- Zenity for the directory chooser and confirmation dialog.
 - Python 3.
 
 ## Development

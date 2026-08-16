@@ -14,6 +14,7 @@ Item {
   property bool refreshing: false
   property string statusText: "Checking…"
   property string account: ""
+  property string accountKey: ""
   property string restrictionState: ""
   property string driveMountPath: ""
   property var tresors: []
@@ -74,6 +75,7 @@ Item {
     if (desiredRunning !== -1 && running === (desiredRunning === 1)) desiredRunning = -1
     statusText = String(parsed.statusText || (installed ? "Unavailable" : "Not installed"))
     account = String(parsed.account || "")
+    accountKey = String(parsed.accountKey || "")
     restrictionState = String(parsed.restrictionState || "")
     driveMountPath = String(parsed.driveMountPath || "")
     tresors = parsed.tresors || []
@@ -142,7 +144,7 @@ Item {
     if (!tresor) return "invalid-target"
     if (tresor.synced === enable) return "unchanged"
     if (enable && tresor.canStart !== true)
-      return rejectAction("Choose a local sync folder in the Tresorit app first", "needs-folder")
+      return rejectAction("Choose a local sync folder first", "needs-folder")
     if (!enable && tresor.canStop !== true)
       return rejectAction("The current sync folder could not be safely remembered", "state-unavailable")
     var targetId = String(tresor.id || tresor.name || "")
@@ -152,6 +154,27 @@ Item {
       enable ? "Starting tresor sync…" : "Stopping tresor sync…",
       targetId,
       enable ? 1 : 0
+    )
+    return launched ? "queued" : "busy"
+  }
+
+  function startTresorAt(id, path, expectedAccountKey) {
+    if (!installed) return "not-installed"
+    if (actionProcess.running) return rejectAction("Another Tresorit action is already running", "busy")
+    if (!running) return rejectAction("Start Tresorit before choosing a sync folder", "daemon-stopped")
+    var tresor = findTresor(id)
+    if (!tresor || tresor.synced === true)
+      return rejectAction("That tresor is no longer available for setup", "invalid-target")
+    var targetId = String(tresor.id || tresor.name || "")
+    var localFolder = String(path || "")
+    var accountFingerprint = String(expectedAccountKey || "")
+    if (targetId === "" || localFolder === "" || accountFingerprint === "")
+      return rejectAction("The selected sync setup is no longer valid", "invalid-target")
+    var launched = runAction(
+      ["sync-start-at", targetId, localFolder, accountFingerprint],
+      "Starting tresor sync…",
+      targetId,
+      1
     )
     return launched ? "queued" : "busy"
   }

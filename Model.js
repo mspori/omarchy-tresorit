@@ -7,6 +7,7 @@ function defaultStatus() {
     authenticated: false,
     statusText: "Unavailable",
     account: "",
+    accountKey: "",
     restrictionState: "",
     driveMountPath: "",
     tresors: [],

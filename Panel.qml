@@ -16,6 +16,12 @@ Panel {
   property bool cursorActive: false
   property string focusSection: "header"
   property int rowIndex: 0
+  property var pendingTresor: null
+  property string pendingSyncPath: ""
+  property string pendingAccountKey: ""
+  property string _folderPickerOutput: ""
+  property string _folderPickerError: ""
+  property string _confirmSyncError: ""
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
@@ -86,6 +92,37 @@ Panel {
     }
   }
 
+  function chooseSyncFolder(tresor) {
+    if (!tresor || !tresorit.running || tresorit.busy
+        || folderPickerProcess.running || confirmSyncProcess.running) return
+    pendingTresor = tresor
+    pendingSyncPath = ""
+    pendingAccountKey = tresorit.accountKey
+    _folderPickerOutput = ""
+    _folderPickerError = ""
+    folderPickerProcess.command = [
+      "zenity",
+      "--file-selection",
+      "--directory",
+      "--title=Choose a sync folder for " + String(tresor.name || "tresor"),
+      "--filename=" + Quickshell.env("HOME") + "/"
+    ]
+    root.close()
+    folderPickerProcess.running = true
+  }
+
+  function toggleOrChooseTresor(tresor) {
+    if (!tresor) return
+    if (tresor.synced !== true && tresor.canStart !== true) chooseSyncFolder(tresor)
+    else tresorit.toggleTresor(tresor)
+  }
+
+  function clearPendingSync() {
+    pendingTresor = null
+    pendingSyncPath = ""
+    pendingAccountKey = ""
+  }
+
   function scrollCursorIntoView() {
     if (!panelFlick || focusSection !== "rows" || rowIndex >= rowColumn.children.length) return
     var item = rowColumn.children[rowIndex]
@@ -112,6 +149,82 @@ Panel {
   Service {
     id: tresorit
     settings: root.settings
+  }
+
+  Process {
+    id: folderPickerProcess
+    running: false
+    command: []
+    stdout: StdioCollector {
+      id: folderPickerStdout
+      waitForEnd: true
+      onStreamFinished: root._folderPickerOutput = text
+    }
+    stderr: StdioCollector {
+      id: folderPickerStderr
+      waitForEnd: true
+      onStreamFinished: root._folderPickerError = text
+    }
+    onExited: function(exitCode) {
+      var stdout = String(folderPickerStdout.text || root._folderPickerOutput || "")
+      var stderr = String(folderPickerStderr.text || root._folderPickerError || "")
+      if (exitCode === 0 && root.pendingTresor) {
+        var path = stdout.replace(/\r?\n$/, "")
+        if (path !== "") {
+          root.pendingSyncPath = path
+          root._confirmSyncError = ""
+          confirmSyncProcess.command = [
+            "zenity",
+            "--question",
+            "--no-markup",
+            "--default-cancel",
+            "--title=Start tresor sync?",
+            "--ok-label=Sync",
+            "--cancel-label=Cancel",
+            "--text=Sync “" + String(root.pendingTresor.name || "tresor") + "” to:\n"
+              + path + "\n\nExisting folder contents can be merged and uploaded."
+          ]
+          confirmSyncProcess.running = true
+          return
+        }
+      } else if (exitCode !== 1) {
+        tresorit.rejectAction(
+          tresorit.elide(stderr || "Could not open the folder chooser"),
+          "folder-picker-failed"
+        )
+      }
+      root.clearPendingSync()
+      root.open()
+    }
+  }
+
+  Process {
+    id: confirmSyncProcess
+    running: false
+    command: []
+    stdout: StdioCollector { waitForEnd: true }
+    stderr: StdioCollector {
+      id: confirmSyncStderr
+      waitForEnd: true
+      onStreamFinished: root._confirmSyncError = text
+    }
+    onExited: function(exitCode) {
+      var stderr = String(confirmSyncStderr.text || root._confirmSyncError || "")
+      if (exitCode === 0 && root.pendingTresor && root.pendingSyncPath !== "") {
+        tresorit.startTresorAt(
+          String(root.pendingTresor.id || ""),
+          root.pendingSyncPath,
+          root.pendingAccountKey
+        )
+      } else if (exitCode !== 1) {
+        tresorit.rejectAction(
+          tresorit.elide(stderr || "Could not confirm the sync folder"),
+          "folder-confirmation-failed"
+        )
+      }
+      root.clearPendingSync()
+      root.open()
+    }
   }
 
   Connections {
@@ -176,7 +289,11 @@ Panel {
         else if (text === "o" || text === "O") tresorit.openApp()
         else if ((text === "s" || text === "S") && root.cursorActive
                  && root.focusSection === "rows" && root.rowIndex < tresorit.tresors.length)
-          tresorit.toggleTresor(tresorit.tresors[root.rowIndex])
+          root.toggleOrChooseTresor(tresorit.tresors[root.rowIndex])
+        else if ((text === "f" || text === "F") && root.cursorActive
+                 && root.focusSection === "rows" && root.rowIndex < tresorit.tresors.length
+                 && tresorit.tresors[root.rowIndex].synced !== true)
+          root.chooseSyncFolder(tresorit.tresors[root.rowIndex])
       }
 
       Flickable {
@@ -341,6 +458,7 @@ Panel {
     property var tresor: null
     property int rowNumber: 0
     readonly property bool synced: tresorit.tresorIsSynced(tresor)
+    readonly property bool canResume: !synced && tresor && tresor.canStart === true
 
     hasCursor: root.cursorActive && root.focusSection === "rows" && root.rowIndex === rowNumber
     current: synced
@@ -350,7 +468,7 @@ Panel {
     MouseArea {
       anchors.left: parent.left
       anchors.right: parent.right
-      anchors.rightMargin: Style.space(58)
+      anchors.rightMargin: Style.space(tresorRow.canResume ? 96 : 58)
       anchors.top: parent.top
       anchors.bottom: parent.bottom
       hoverEnabled: true
@@ -397,8 +515,23 @@ Panel {
         }
       }
 
+      PanelActionButton {
+        visible: !tresorRow.synced
+        iconText: "󰉋"
+        tooltipText: tresorit.running
+          ? (tresorRow.canResume ? "Choose a different sync folder" : "Choose a local sync folder")
+          : "Start Tresorit first"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        enabled: tresorit.running && !tresorit.busy
+        Layout.alignment: Qt.AlignVCenter
+        onHovered: function(on) { if (on) root.setRowCursor(tresorRow.rowNumber) }
+        onClicked: root.chooseSyncFolder(tresorRow.tresor)
+      }
+
       ToggleSwitch {
         id: syncSwitch
+        visible: tresorRow.synced || (tresorRow.tresor && tresorRow.tresor.canStart === true)
         checked: tresorRow.synced
         busy: tresorit.tresorIsBusy(tresorRow.tresor)
         enabled: tresorit.tresorCanToggle(tresorRow.tresor)
@@ -417,7 +550,7 @@ Panel {
               : "Sync folder state is unavailable")
             : (tresorRow.tresor && tresorRow.tresor.canStart
               ? "Resume syncing to its previous folder"
-              : "Choose a sync folder in Tresorit first")
+              : "Choose a local sync folder")
           fontFamily: root.fontFamily
         }
       }

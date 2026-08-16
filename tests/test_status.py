@@ -28,6 +28,7 @@ class ParseStatusTests(unittest.TestCase):
         self.assertTrue(parsed["authenticated"])
         self.assertEqual(parsed["statusText"], "Running")
         self.assertEqual(parsed["account"], "person@example.test")
+        self.assertEqual(parsed["accountKey"], status.account_key("person@example.test"))
         self.assertEqual(parsed["driveMountPath"], "")
 
     def test_stopped_and_logged_out(self):
@@ -134,7 +135,7 @@ class ActionValidationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)
             row = {"id": "folder-id", "synced": False, "syncPath": ""}
-            context = ([row], {"folder-id": str(path)}, "account")
+            context = ([row], {"folder-id": str(path)}, "account", "")
             with mock.patch.object(status, "sync_context", return_value=context):
                 with mock.patch.object(status, "run_cli", return_value=(0, "", "")) as run:
                     exit_code = status.perform_action("cli", "sync-start", "folder-id")
@@ -147,7 +148,7 @@ class ActionValidationTests(unittest.TestCase):
     def test_sync_stop_requires_durable_current_path(self):
         row = {"id": "folder-id", "synced": True, "syncPath": "/current"}
         with mock.patch.object(
-            status, "sync_context", return_value=([row], {}, "account")
+            status, "sync_context", return_value=([row], {}, "account", "")
         ):
             errors = io.StringIO()
             with redirect_stderr(errors):
@@ -155,6 +156,144 @@ class ActionValidationTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 2)
         self.assertIn("safely remembered", errors.getvalue())
+
+    def test_sync_start_at_validates_remembers_and_uses_selected_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            selected = root / "selected"
+            selected.mkdir()
+            state_file = root / "state" / "sync-paths.json"
+            row = {"id": "folder-id", "synced": False, "syncPath": ""}
+            context = ([row], {}, "account", "")
+            with mock.patch.object(status, "STATE_FILE", state_file):
+                with mock.patch.object(status, "sync_context", return_value=context):
+                    with mock.patch.object(status, "run_cli", return_value=(0, "", "")) as run:
+                        exit_code = status.perform_action(
+                            "cli",
+                            "sync-start-at",
+                            "folder-id",
+                            str(selected),
+                            status.account_key("account"),
+                        )
+                with status.state_lock():
+                    saved = status.remembered_paths(status.load_state(), "account")
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(saved, {"folder-id": str(selected)})
+        run.assert_called_once_with(
+            "cli", ["sync", "--start", "folder-id", "--path", str(selected)]
+        )
+
+    def test_sync_start_at_rejects_overlapping_tresor_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            existing = root / "existing"
+            selected = existing / "nested"
+            selected.mkdir(parents=True)
+            rows = [
+                {"id": "folder-id", "synced": False, "syncPath": ""},
+                {"id": "other-id", "synced": True, "syncPath": str(existing)},
+            ]
+
+            with self.assertRaisesRegex(ValueError, "overlap"):
+                status.validate_sync_path(selected.as_posix(), rows, "folder-id", "")
+
+    def test_sync_start_at_rejects_tresorit_drive(self):
+        with tempfile.TemporaryDirectory() as directory:
+            drive = Path(directory) / "drive"
+            selected = drive / "nested"
+            selected.mkdir(parents=True)
+            rows = [{"id": "folder-id", "synced": False, "syncPath": ""}]
+
+            with self.assertRaisesRegex(ValueError, "Tresorit Drive"):
+                status.validate_sync_path(
+                    selected.as_posix(), rows, "folder-id", drive.as_posix()
+                )
+
+    def test_sync_start_at_rejects_account_change(self):
+        row = {"id": "folder-id", "synced": False, "syncPath": ""}
+        context = ([row], {}, "new-account", "")
+        with mock.patch.object(status, "sync_context", return_value=context):
+            errors = io.StringIO()
+            with redirect_stderr(errors):
+                exit_code = status.perform_action(
+                    "cli", "sync-start-at", "folder-id", "/unused", "old-key"
+                )
+
+        self.assertEqual(exit_code, 2)
+        self.assertIn("account changed", errors.getvalue())
+
+    def test_selected_path_cannot_overlap_stopped_remembered_tresor(self):
+        with tempfile.TemporaryDirectory() as directory:
+            remembered = Path(directory) / "remembered"
+            selected = remembered / "nested"
+            selected.mkdir(parents=True)
+            rows = [
+                {"id": "folder-id", "synced": False, "syncPath": ""},
+                {"id": "stopped-id", "synced": False, "syncPath": ""},
+            ]
+
+            with self.assertRaisesRegex(ValueError, "remembered"):
+                status.validate_sync_path(
+                    selected.as_posix(),
+                    rows,
+                    "folder-id",
+                    "",
+                    {"stopped-id": remembered.as_posix()},
+                )
+
+    def test_failed_start_keeps_user_selected_path_for_safe_retry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            selected = root / "selected"
+            selected.mkdir()
+            state_file = root / "state" / "sync-paths.json"
+            row = {"id": "folder-id", "synced": False, "syncPath": ""}
+            context = ([row], {}, "account", "")
+            with mock.patch.object(status, "STATE_FILE", state_file):
+                with mock.patch.object(status, "sync_context", return_value=context):
+                    with mock.patch.object(
+                        status, "run_cli", return_value=(1, "", "start failed")
+                    ):
+                        errors = io.StringIO()
+                        with redirect_stderr(errors):
+                            exit_code = status.perform_action(
+                                "cli",
+                                "sync-start-at",
+                                "folder-id",
+                                str(selected),
+                                status.account_key("account"),
+                            )
+                with status.state_lock():
+                    saved = status.remembered_paths(status.load_state(), "account")
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(saved, {"folder-id": str(selected)})
+
+    def test_sync_does_not_start_when_selected_path_cannot_be_remembered(self):
+        with tempfile.TemporaryDirectory() as directory:
+            selected = Path(directory) / "selected"
+            selected.mkdir()
+            row = {"id": "folder-id", "synced": False, "syncPath": ""}
+            context = ([row], {}, "account", "")
+            with mock.patch.object(status, "sync_context", return_value=context):
+                with mock.patch.object(
+                    status, "remember_selected_path", side_effect=OSError("read only")
+                ):
+                    with mock.patch.object(status, "run_cli") as run:
+                        errors = io.StringIO()
+                        with redirect_stderr(errors):
+                            exit_code = status.perform_action(
+                                "cli",
+                                "sync-start-at",
+                                "folder-id",
+                                str(selected),
+                                status.account_key("account"),
+                            )
+
+        self.assertEqual(exit_code, 2)
+        self.assertIn("safely remembered", errors.getvalue())
+        run.assert_not_called()
 
 
 class StateTests(unittest.TestCase):

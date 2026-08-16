@@ -103,6 +103,7 @@ def parse_status(raw: str) -> dict[str, object]:
         "authenticated": authenticated,
         "statusText": status_text,
         "account": account if authenticated else "",
+        "accountKey": account_key(account) if authenticated else "",
         "restrictionState": restriction,
         "driveMountPath": "" if drive_mount_path == "-" else drive_mount_path,
     }
@@ -278,6 +279,7 @@ def unavailable_status(message: str = "Tresorit CLI is not installed") -> dict[s
         "authenticated": False,
         "statusText": message,
         "account": "",
+        "accountKey": "",
         "restrictionState": "",
         "driveMountPath": "",
         "tresors": [],
@@ -373,7 +375,9 @@ def valid_target(value: str) -> str:
     return target
 
 
-def sync_context(cli: str) -> tuple[list[dict[str, object]], dict[str, str], str]:
+def sync_context(
+    cli: str,
+) -> tuple[list[dict[str, object]], dict[str, str], str, str]:
     status_exit, status_output, status_error = run_cli(cli, ["-p", "status"])
     if status_exit != 0:
         raise ValueError(status_error or status_output or "Could not read Tresorit status")
@@ -391,15 +395,92 @@ def sync_context(cli: str) -> tuple[list[dict[str, object]], dict[str, str], str
     account = str(current["account"])
     with state_lock():
         paths = remembered_paths(load_state(), account)
-    return parse_tresors(tresors_output, paths), paths, account
+    return (
+        parse_tresors(tresors_output, paths),
+        paths,
+        account,
+        str(current["driveMountPath"]),
+    )
 
 
-def perform_action(cli: str, action: str, target: str | None) -> int:
+def paths_overlap(first: Path, second: Path) -> bool:
+    return first == second or first.is_relative_to(second) or second.is_relative_to(first)
+
+
+def validate_sync_path(
+    raw_path: str,
+    tresors: list[dict[str, object]],
+    target_id: str,
+    drive_mount_path: str,
+    known_paths: dict[str, str] | None = None,
+) -> Path:
+    if not raw_path or "\0" in raw_path or "\n" in raw_path or "\r" in raw_path:
+        raise ValueError("Invalid local sync folder")
+    candidate = Path(raw_path).expanduser()
+    if not candidate.is_absolute():
+        raise ValueError("The local sync folder must be an absolute path")
+    try:
+        candidate = candidate.resolve(strict=True)
+    except (OSError, RuntimeError) as error:
+        raise ValueError("The selected sync folder does not exist") from error
+    if not candidate.is_dir():
+        raise ValueError("The selected sync folder is not a directory")
+    if candidate in (Path("/"), Path.home().resolve()):
+        raise ValueError("Choose a dedicated folder, not the filesystem root or home folder")
+    if not os.access(candidate, os.W_OK | os.X_OK):
+        raise ValueError("The selected sync folder is not writable")
+
+    if drive_mount_path:
+        try:
+            drive_path = Path(drive_mount_path).resolve(strict=False)
+        except (OSError, RuntimeError):
+            drive_path = Path(drive_mount_path)
+        if paths_overlap(candidate, drive_path):
+            raise ValueError("The sync folder cannot be inside Tresorit Drive")
+
+    for tresor in tresors:
+        if str(tresor["id"]) == target_id or not tresor["synced"]:
+            continue
+        existing_value = str(tresor["syncPath"])
+        try:
+            existing = Path(existing_value).resolve(strict=False)
+        except (OSError, RuntimeError):
+            existing = Path(existing_value)
+        if paths_overlap(candidate, existing):
+            raise ValueError("The sync folder cannot overlap another synced tresor")
+    for identifier, existing_value in (known_paths or {}).items():
+        if identifier == target_id:
+            continue
+        try:
+            existing = Path(existing_value).resolve(strict=False)
+        except (OSError, RuntimeError):
+            existing = Path(existing_value)
+        if paths_overlap(candidate, existing):
+            raise ValueError("The sync folder cannot overlap another remembered tresor folder")
+    return candidate
+
+
+def remember_selected_path(account: str, target: str, path: Path) -> None:
+    with state_lock():
+        state = load_state()
+        paths = remembered_paths(state, account)
+        paths[target] = str(path)
+        set_remembered_paths(state, account, paths)
+        save_state(state)
+
+
+def perform_action(
+    cli: str,
+    action: str,
+    target: str | None,
+    selected_path: str | None = None,
+    expected_account_key: str | None = None,
+) -> int:
     commands = {
         "start": ["start"],
         "stop": ["stop"],
     }
-    if action in ("sync-start", "sync-stop"):
+    if action in ("sync-start", "sync-start-at", "sync-stop"):
         if target is None:
             print("A tresor name or id is required", file=sys.stderr)
             return 2
@@ -409,28 +490,66 @@ def perform_action(cli: str, action: str, target: str | None) -> int:
             print(error, file=sys.stderr)
             return 2
         try:
-            tresors, account_paths, _account = sync_context(cli)
+            tresors, account_paths, account, drive_mount_path = sync_context(cli)
         except ValueError as error:
             print(error, file=sys.stderr)
+            return 2
+        if action == "sync-start-at" and account_key(account) != expected_account_key:
+            print("The Tresorit account changed while choosing the sync folder", file=sys.stderr)
             return 2
         tresor = next((row for row in tresors if row["id"] == safe_target), None)
         if tresor is None:
             print("The requested tresor is not available", file=sys.stderr)
             return 2
-        if action == "sync-start":
+        if action in ("sync-start", "sync-start-at"):
+            if tresor["synced"]:
+                print("The requested tresor is already synced", file=sys.stderr)
+                return 2
             sync_path = account_paths.get(safe_target, "")
-            path = Path(sync_path)
-            if (
-                not sync_path
-                or not path.is_absolute()
-                or not path.is_dir()
-                or not os.access(path, os.W_OK)
-            ):
+            if action == "sync-start-at":
+                if selected_path is None:
+                    print("A local sync folder is required", file=sys.stderr)
+                    return 2
+                try:
+                    path = validate_sync_path(
+                        selected_path,
+                        tresors,
+                        safe_target,
+                        drive_mount_path,
+                        account_paths,
+                    )
+                except ValueError as error:
+                    print(error, file=sys.stderr)
+                    return 2
+                sync_path = str(path)
+            if not sync_path:
                 print(
-                    "No usable previous sync folder is known; choose a folder in the Tresorit app",
+                    "No usable previous sync folder is known; choose a local folder first",
                     file=sys.stderr,
                 )
                 return 2
+            try:
+                path = validate_sync_path(
+                    sync_path,
+                    tresors,
+                    safe_target,
+                    drive_mount_path,
+                    account_paths,
+                )
+            except ValueError as error:
+                print(error, file=sys.stderr)
+                return 2
+            sync_path = str(path)
+            if action == "sync-start-at":
+                try:
+                    remember_selected_path(account, safe_target, path)
+                except OSError as error:
+                    print(
+                        "The selected folder could not be safely remembered: "
+                        + str(error),
+                        file=sys.stderr,
+                    )
+                    return 2
             command = ["sync", "--start", safe_target, "--path", sync_path]
         else:
             sync_path = account_paths.get(safe_target, "")
@@ -458,9 +577,18 @@ def argument_parser() -> argparse.ArgumentParser:
         "action",
         nargs="?",
         default="status",
-        choices=("status", "start", "stop", "sync-start", "sync-stop"),
+        choices=(
+            "status",
+            "start",
+            "stop",
+            "sync-start",
+            "sync-start-at",
+            "sync-stop",
+        ),
     )
     parser.add_argument("target", nargs="?")
+    parser.add_argument("path", nargs="?")
+    parser.add_argument("account_key", nargs="?")
     return parser
 
 
@@ -477,7 +605,13 @@ def main() -> int:
     if arguments.action == "status":
         print(json.dumps(collect_status(cli), ensure_ascii=False))
         return 0
-    return perform_action(cli, arguments.action, arguments.target)
+    return perform_action(
+        cli,
+        arguments.action,
+        arguments.target,
+        arguments.path,
+        arguments.account_key,
+    )
 
 
 if __name__ == "__main__":

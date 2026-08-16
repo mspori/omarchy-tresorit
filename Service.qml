@@ -314,7 +314,7 @@ Item {
   function openTresor(tresor) {
     var path = String((tresor && (tresor.syncPath
       || (tresor.linkedPathUsable === true ? tresor.linkedPath : ""))) || "")
-    if (path !== "") Quickshell.execDetached(["uwsm-app", "--", "nautilus", path])
+    if (path !== "") Quickshell.execDetached(["uwsm-app", "--", "xdg-open", path])
   }
 
   function openFile(file) {
@@ -391,7 +391,9 @@ Item {
     stderr: StdioCollector { id: fileStatusStderr; waitForEnd: true }
     onExited: function(exitCode) {
       if (exitCode === 0) root.applyStatus(fileStatusStdout.text)
-      else root.lastError = root.elide(fileStatusStderr.text || fileStatusStdout.text || "Could not read Tresorit status")
+      else root.lastError = root.elide(
+        fileStatusStderr.text || fileStatusStdout.text || "Could not read Tresorit status"
+      )
       root.launchQueuedAction()
     }
   }

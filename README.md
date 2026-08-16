@@ -1,117 +1,167 @@
 # Tresorit for Omarchy
 
-An Omarchy Shell bar plugin for monitoring and controlling the Tresorit Linux
-client. It is designed as a Tresorit counterpart to Omarchy's built-in Dropbox
-widget.
+An unofficial Omarchy plugin for controlling the Tresorit Linux client. It
+brings daemon status, transfer activity, selective folder sync, and CLI login
+into a panel modelled after Omarchy's built-in Dropbox widget.
+
+This project is not affiliated with or endorsed by Tresorit.
 
 ## Features
 
-- Show whether Tresorit is installed, running, and authenticated.
-- Display current transfer activity and sync errors.
-- Show files currently being processed and their Tresorit transfer status.
-- Keep a private, bounded history of files whose completion the plugin observed.
-- List locally available tresors and open their folders.
-- Group tresors into synced and not-synced sections.
-- Start or stop the Tresorit daemon.
-- Choose a local folder and start or stop synchronization for individual tresors.
-- Forget a stopped tresor's remembered folder without deleting local or cloud files.
-- Sign in through the Tresorit CLI with password/TOTP or SSO.
+- Shows whether Tresorit is installed, running, authenticated, or restricted.
+- Displays per-tresor transfer progress, sync errors, and active files.
+- Keeps a private, bounded history of files whose completion it observed.
+- Opens locally available tresors and files from the panel.
+- Starts and stops the Tresorit daemon or individual tresor syncs.
+- Chooses, changes, remembers, and forgets local sync folders with safety checks.
+- Signs in from a terminal with password/TOTP or SSO.
+- Supports mouse, keyboard, and Omarchy Shell IPC controls.
 
-When a synced tresor is switched off, the plugin remembers its former local
-folder so it can safely be switched on again. For a cloud-only tresor, use the
-folder button to choose its local destination; the plugin never guesses one.
+## Requirements
+
+- Omarchy (tested with Omarchy 4.0).
+- [Tresorit for Linux](https://tresorit.com/download/linux) and its
+  `tresorit-cli`. The plugin searches `PATH` and Tresorit's default install path,
+  `~/.local/share/tresorit/tresorit-cli`.
+- Python 3, Zenity, and `xdg-open` (included with Omarchy by default).
+
+Tresorit documents its Linux CLI, dependencies, and commands in its
+[Linux CLI guide](https://support.tresorit.com/hc/en-us/articles/360009330614-Using-Tresorit-CLI-for-Linux).
 
 ## Installation
 
-Install the plugin from its Git repository and enable it in the bar:
+Install and enable the plugin from GitHub:
 
 ```bash
-omarchy plugin add <git-url> --enable
+omarchy plugin add https://github.com/mspori/omarchy-tresorit.git --enable
 ```
 
 Omarchy asks for confirmation because shell plugins run as unsandboxed user
-code. Review the repository before enabling it.
+code. Review the code before enabling it.
 
-For local development, a Git checkout can be installed with a file URL:
+Update or remove it later with:
 
 ```bash
-omarchy plugin add file:///absolute/path/to/michaelspori.tresorit --enable
+omarchy plugin update mspori.tresorit
+omarchy plugin remove mspori.tresorit
 ```
 
 ## Usage
 
-- Left-click the bar icon to open the panel.
-- Right-click it to refresh status.
-- Click a synced or linked tresor to open its local folder. Click an unlinked
-  cloud-only tresor—or one whose previous folder is unavailable—to choose its
-  local sync folder.
-- Switch between the **Tresors** and **Files** tabs with the mouse or Left/Right.
-  The Files tab shows active transfers and the most recently observed completed
-  files; click a resolvable file to open it in its default application.
-- Use the trailing switch to turn synchronization for that tresor on or off.
-- Use the folder button on a cloud-only tresor to select its local sync folder.
-- Use the folder-with-pencil button on a linked or synced tresor to change its
-  destination. Active syncs are stopped and restarted, with rollback to the
-  previous folder if the new start fails and its safe state can be restored.
-- Use the forget button on a linked but unsynced tresor to remove only the
-  plugin's remembered folder. The folder and all local and cloud files remain
-  untouched; a folder must be chosen again before that tresor can sync.
-- Use the header switch to start or stop the Tresorit daemon. This interrupts
-  all Tresorit synchronization and Tresorit Drive; it is separate from the
-  per-tresor switches.
+| Control | Action |
+|---|---|
+| Left-click the bar icon | Open or close the panel |
+| Right-click the bar icon | Refresh status |
+| Header switch | Start or stop the Tresorit daemon |
+| Tresor row | Open its local folder, or choose one if none is usable |
+| Folder button | Choose or change the local sync folder |
+| Tresor switch | Start or stop syncing that tresor |
+| Forget button | Forget a stopped tresor's remembered folder |
+| File row | Open the local file when it can be resolved safely |
 
-The panel supports arrow-key navigation, Enter to open the selected tresor or file,
-`S` to change its sync selection, `F` to choose or change its local folder,
-`R` to refresh, and `L` to open the CLI login when signed out.
+The **Tresors** tab groups folders by local sync state. The **Files** tab lists
+active transfers and recently observed completions.
 
-Tresorit's CLI only reports files that are currently being processed; it does
-not provide completed-file history or completion timestamps. The plugin records
-a file as previously synced when it disappears from a later successful transfer
-poll while its tresor remains healthy and synced. The displayed time is therefore
-the time completion was observed locally, and transfers completed while the
-plugin is not polling may be absent. File paths are opened only when they resolve
-to an existing file inside the tresor's current local sync folder.
-The **Synced file history** plugin setting controls how many completed entries
-are retained, from 10 to 200 (50 by default). Active transfers are never limited.
+Keyboard controls while the panel is open:
+
+| Key | Action |
+|---|---|
+| Arrow keys | Move through the header, tabs, and rows |
+| Enter | Activate the selected control or row |
+| `S` | Start or stop the selected tresor sync |
+| `F` | Choose or change the selected tresor's local folder |
+| Delete | Forget the selected stopped tresor's linked folder |
+| `R` | Refresh status |
+| `L` | Open CLI login when signed out |
+| Escape | Close the panel |
+
+The daemon switch interrupts every Tresorit sync and Tresorit Drive. It is
+separate from the per-tresor switches.
 
 ### Sync-folder safety
 
-Tresorit requires an explicit local folder when synchronization is enabled.
-The plugin stores folders it has already observed in:
+Tresorit requires an explicit local folder when sync is enabled; the plugin
+never guesses one. Before passing a folder to Tresorit, it verifies that the
+folder exists, is writable, and does not overlap:
+
+- the filesystem root or the home folder itself;
+- Tresorit Drive;
+- another synced tresor; or
+- a folder remembered for another tresor.
+
+Changing a sync folder stops the current sync and starts it at the new
+destination. If the new start fails, the plugin restores the former selection
+and attempts to restart it. A timeout is treated as indeterminate and does not
+launch a competing rollback. The plugin does not move or delete the old local
+folder; existing content in the new folder may be merged and uploaded by
+Tresorit, so the destination is always shown for confirmation first.
+
+The forget action only removes the plugin's remembered link. It never deletes
+local or cloud files.
+
+### File activity and history
+
+Tresorit's CLI reports files only while it is processing them; it provides no
+completed-file history or completion timestamps. The plugin records a file as
+completed when it disappears from a later successful poll while its tresor
+remains healthy and synced. The displayed time is when completion was observed,
+not necessarily when the transfer actually finished. Transfers completed while
+the plugin was not polling may be absent.
+
+## Settings
+
+Configure the widget in **Setup › Plugins** or in its entry in
+`~/.config/omarchy/shell.json`.
+
+| Setting | Default | Range | Purpose |
+|---|---:|---:|---|
+| `refreshIntervalSec` | 30 seconds | 10–3600 | General status polling interval |
+| `fileHistoryLimit` | 50 files | 10–200 | Maximum observed completions retained |
+
+While the Files tab is open, active file details are polled every two seconds.
+
+## Local data and privacy
+
+The plugin talks only to the locally installed `tresorit-cli`; it makes no
+network requests of its own. Login credentials are handled by Tresorit's CLI,
+and the plugin does not store them.
+
+Remembered sync folders and observed file activity are stored in:
 
 ```text
-${XDG_STATE_HOME:-~/.local/state}/omarchy/michaelspori.tresorit/sync-paths.json
+${XDG_STATE_HOME:-~/.local/state}/omarchy/mspori.tresorit/sync-paths.json
 ```
 
-The state directory and file are user-private. Account addresses are stored as
-one-way hashes, and paths are scoped by that account and a stable tresor
-identifier. A remembered folder must still exist and be writable before the
-plugin will pass it back to Tresorit. New
-selections are also rejected if they overlap another synced tresor, Tresorit
-Drive, the filesystem root, or the home folder itself. The selected folder is
-shown for confirmation before synchronization starts.
+The directory is created with mode `0700` and the file with mode `0600`. It
+contains local folder paths, tresor and file names, observation timestamps, and
+a SHA-256 account identifier—but not the account address in clear text. Data is
+scoped by account and tresor identifier.
 
-## Requirements
+CLI output can contain account addresses, tresor names, owners, and local paths.
+Please redact it before opening a bug report.
 
-- Omarchy with the Quickshell-based Omarchy Shell plugin system.
-- Tresorit for Linux with `tresorit-cli` installed.
-- Zenity for the directory chooser and confirmation dialog.
-- Python 3.
+## Troubleshooting
 
-## Development
-
-Run the parser/model tests and Omarchy validator:
-
-```bash
-python3 -m unittest discover -s tests -v
-node tests/test_model.js
-omarchy plugin validate .
-```
-
-The helper calls the CLI with argument arrays rather than shell commands. Tests
-and bug reports should never include raw CLI output: it can contain account
-addresses, tresor names, owners, and local paths.
+- **CLI not installed:** confirm that
+  `~/.local/share/tresorit/tresorit-cli status` works. If Tresorit is installed
+  elsewhere, add its directory to `PATH` or set `TRESORIT_CLI` before starting
+  Omarchy Shell.
+- **Plugin missing from the bar:** run `omarchy plugin list`, enable it with
+  `omarchy plugin enable mspori.tresorit --section right`, then run
+  `omarchy restart shell` if needed.
+- **A folder is rejected:** use a dedicated, writable directory that does not
+  contain, or sit inside, another Tresorit sync location.
+- **Status is stale after a command:** use right-click or `R` to refresh. Some
+  Tresorit operations continue after the CLI call returns or times out.
 
 ## License
 
 [MIT](LICENSE)
+
+Tresorit is a trademark of Tresorit. All other trademarks belong to their
+respective owners.
+
+## Development disclosure
+
+This plugin was built largely with OpenAI Codex under human direction, review,
+and testing.

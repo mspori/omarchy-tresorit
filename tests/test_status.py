@@ -18,6 +18,32 @@ SPEC.loader.exec_module(status)
 
 
 class ParseStatusTests(unittest.TestCase):
+    def test_unavailable_status_has_a_complete_stable_shape(self):
+        result = status.unavailable_status()
+
+        self.assertEqual(
+            set(result),
+            {
+                "ok",
+                "snapshotValid",
+                "installed",
+                "running",
+                "authenticated",
+                "statusText",
+                "account",
+                "accountKey",
+                "restrictionState",
+                "driveMountPath",
+                "tresors",
+                "activeFiles",
+                "completedFiles",
+                "filesLeft",
+                "errors",
+                "lastError",
+            },
+        )
+        self.assertEqual(result["lastError"], "")
+
     def test_cli_argument_shapes_used_by_service(self):
         parser = status.argument_parser()
         cases = (
@@ -521,6 +547,34 @@ class ActionValidationTests(unittest.TestCase):
 
 
 class StateTests(unittest.TestCase):
+    def test_legacy_plugin_state_is_copied_to_the_new_id(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state_root = Path(directory) / "omarchy"
+            legacy_file = (
+                state_root / status.LEGACY_PLUGIN_ID / "sync-paths.json"
+            )
+            current_file = state_root / status.PLUGIN_ID / "sync-paths.json"
+            state = status.empty_state()
+            status.set_remembered_paths(
+                state, "person@example.test", {"folder-id": "/sync"}
+            )
+
+            with mock.patch.object(status, "STATE_FILE", legacy_file):
+                with status.state_lock():
+                    status.save_state(state)
+
+            with mock.patch.object(status, "STATE_FILE", current_file):
+                with status.state_lock():
+                    loaded = status.load_state()
+
+            self.assertEqual(
+                status.remembered_paths(loaded, "person@example.test"),
+                {"folder-id": "/sync"},
+            )
+            self.assertTrue(current_file.is_file())
+            self.assertTrue(legacy_file.is_file())
+            self.assertEqual(current_file.stat().st_mode & 0o777, 0o600)
+
     def test_forget_linked_path_removes_only_the_remembered_path(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

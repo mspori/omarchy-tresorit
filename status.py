@@ -23,7 +23,9 @@ from typing import Sequence
 COMMAND_TIMEOUT_SECONDS = 5
 DEFAULT_CLI_PATH = Path.home() / ".local" / "share" / "tresorit" / "tresorit-cli"
 STATE_HOME = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
-STATE_FILE = STATE_HOME / "omarchy" / "michaelspori.tresorit" / "sync-paths.json"
+PLUGIN_ID = "mspori.tresorit"
+LEGACY_PLUGIN_ID = "michaelspori.tresorit"
+STATE_FILE = STATE_HOME / "omarchy" / PLUGIN_ID / "sync-paths.json"
 STATE_VERSION = 2
 DEFAULT_FILE_HISTORY_LIMIT = 50
 MIN_FILE_HISTORY_LIMIT = 10
@@ -238,20 +240,25 @@ def state_lock():
     try:
         os.chmod(lock_path, 0o600)
         fcntl.flock(descriptor, fcntl.LOCK_EX)
+        migrate_legacy_state_file()
         yield
     finally:
         fcntl.flock(descriptor, fcntl.LOCK_UN)
         os.close(descriptor)
 
 
-def load_state() -> dict[str, object]:
-    if STATE_FILE.is_symlink():
-        return empty_state()
+def read_state_file(path: Path) -> dict[str, object] | None:
+    if path.is_symlink():
+        return None
     try:
-        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return empty_state()
+        return None
     return migrate_state(data)
+
+
+def load_state() -> dict[str, object]:
+    return read_state_file(STATE_FILE) or empty_state()
 
 
 def account_state(
@@ -310,6 +317,15 @@ def save_state(state: dict[str, object]) -> None:
         except OSError:
             pass
         raise
+
+
+def migrate_legacy_state_file() -> None:
+    if STATE_FILE.exists() or STATE_FILE.is_symlink():
+        return
+    legacy_file = STATE_FILE.parent.parent / LEGACY_PLUGIN_ID / STATE_FILE.name
+    legacy_state = read_state_file(legacy_file)
+    if legacy_state is not None:
+        save_state(legacy_state)
 
 
 def parse_transfers(raw: str) -> dict[str, dict[str, object]]:
@@ -421,7 +437,10 @@ def completed_file_rows(
         tresor_id = item.get("tresorId")
         file_name = item.get("fileName")
         completed_at = item.get("completedAt")
-        if not all(isinstance(value, str) and value for value in (tresor_id, file_name, completed_at)):
+        if not all(
+            isinstance(value, str) and value
+            for value in (tresor_id, file_name, completed_at)
+        ):
             continue
         key = file_key(tresor_id, file_name)
         if key in active_keys:
@@ -558,6 +577,7 @@ def unavailable_status(message: str = "Tresorit CLI is not installed") -> dict[s
         "completedFiles": [],
         "filesLeft": 0,
         "errors": 0,
+        "lastError": "",
     }
 
 
@@ -855,7 +875,10 @@ def perform_action(
         except ValueError as error:
             print(error, file=sys.stderr)
             return 2
-        if action in ("sync-start-at", "sync-move") and account_key(account) != expected_account_key:
+        if (
+            action in ("sync-start-at", "sync-move")
+            and account_key(account) != expected_account_key
+        ):
             print("The Tresorit account changed while choosing the sync folder", file=sys.stderr)
             return 2
         tresor = next((row for row in tresors if row["id"] == safe_target), None)

@@ -9,8 +9,8 @@ import "Model.js" as Model
 
 Panel {
   id: root
-  moduleName: "michaelspori.tresorit"
-  ipcTarget: "michaelspori.tresorit"
+  moduleName: "mspori.tresorit"
+  ipcTarget: "mspori.tresorit"
   manageIpc: false
 
   property bool cursorActive: false
@@ -373,7 +373,10 @@ Panel {
       var bottom = top + item.height
       if (top < panelFlick.contentY) panelFlick.contentY = Math.max(0, top - Style.space(6))
       else if (bottom > panelFlick.contentY + panelFlick.height)
-        panelFlick.contentY = Math.min(panelFlick.contentHeight - panelFlick.height, bottom + Style.space(6) - panelFlick.height)
+        panelFlick.contentY = Math.min(
+          panelFlick.contentHeight - panelFlick.height,
+          bottom + Style.space(6) - panelFlick.height
+        )
     })
   }
 
@@ -438,7 +441,9 @@ Panel {
             "--cancel-label=Cancel",
             "--text=" + (root.pendingFolderOperation === "move"
               ? "Move “" + String(root.pendingTresor.name || "tresor") + "” sync to:\n"
-                + path + "\n\nThe current sync will be stopped and restarted. Existing folder contents can be merged and uploaded."
+                + path
+                + "\n\nThe current sync will be stopped and restarted. "
+                + "Existing folder contents can be merged and uploaded."
               : "Sync “" + String(root.pendingTresor.name || "tresor") + "” to:\n"
                 + path + "\n\nExisting folder contents can be merged and uploaded.")
           ]
@@ -1036,6 +1041,7 @@ Panel {
           ? (tresorRow.linked ? "Change the sync folder" : "Choose a local sync folder")
           : "Start Tresorit first"
         foreground: root.foreground
+        hoverColor: root.urgent
         fontFamily: root.fontFamily
         Layout.alignment: Qt.AlignVCenter
         onHovered: function(on) { if (on) root.setRowCursor(tresorRow.rowNumber) }

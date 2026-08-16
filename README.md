@@ -38,8 +38,8 @@ omarchy plugin add file:///absolute/path/to/michaelspori.tresorit --enable
 
 - Left-click the bar icon to open the panel.
 - Middle-click it to open Tresorit and right-click it to refresh status.
-- Click a tresor name to open its local folder, or Tresorit when it has no
-  local folder.
+- Click a synced tresor to open its local folder, or click a cloud-only tresor
+  to choose its local sync folder.
 - Use the trailing switch to turn synchronization for that tresor on or off.
 - Use the folder button on a cloud-only tresor to select its local sync folder.
 - Use the header switch to start or stop the Tresorit daemon. This interrupts

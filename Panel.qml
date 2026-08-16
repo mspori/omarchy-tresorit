@@ -88,8 +88,14 @@ Panel {
       if (tresorit.installed) tresorit.toggleDaemon()
       else tresorit.openApp()
     } else if (focusSection === "rows" && rowIndex < tresorit.tresors.length) {
-      tresorit.openTresor(tresorit.tresors[rowIndex])
+      activateTresorRow(tresorit.tresors[rowIndex])
     }
+  }
+
+  function activateTresorRow(tresor) {
+    if (!tresor) return
+    if (tresor.synced === true) tresorit.openTresor(tresor)
+    else chooseSyncFolder(tresor)
   }
 
   function chooseSyncFolder(tresor) {
@@ -474,7 +480,7 @@ Panel {
       hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
       onEntered: root.setRowCursor(tresorRow.rowNumber)
-      onClicked: tresorit.openTresor(tresorRow.tresor)
+      onClicked: root.activateTresorRow(tresorRow.tresor)
     }
 
     RowLayout {

@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "id": "michaelspori.tresorit",
+  "name": "Tresorit",
+  "version": "0.1.0",
+  "author": "Michael Spori",
+  "license": "MIT",
+  "description": "Tresorit status, transfer activity, and selective tresor sync controls in the Omarchy bar.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Tresorit",
+    "description": "Monitor Tresorit and choose which tresors are synced.",
+    "category": "Files",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 30
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 10,
+        "max": 3600,
+        "step": 5,
+        "defaultValue": 30
+      }
+    ]
+  }
+}
+

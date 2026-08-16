@@ -78,7 +78,8 @@ Item {
     accountKey = String(parsed.accountKey || "")
     restrictionState = String(parsed.restrictionState || "")
     driveMountPath = String(parsed.driveMountPath || "")
-    tresors = parsed.tresors || []
+    var nextTresors = parsed.tresors || []
+    if (JSON.stringify(tresors) !== JSON.stringify(nextTresors)) tresors = nextTresors
     filesLeft = Math.max(0, Number(parsed.filesLeft || 0))
     errors = Math.max(0, Number(parsed.errors || 0))
 
@@ -208,9 +209,9 @@ Item {
   }
 
   function openTresor(tresor) {
-    var path = String((tresor && tresor.syncPath) || "")
+    var path = String((tresor && (tresor.syncPath
+      || (tresor.linkedPathUsable === true ? tresor.linkedPath : ""))) || "")
     if (path !== "") Quickshell.execDetached(["uwsm-app", "--", "nautilus", path])
-    else openApp()
   }
 
   Timer {

@@ -18,6 +18,14 @@ assert.equal(Model.transferSummary(0, 0), "Up to date")
 assert.equal(Model.transferSummary(2, 0), "2 files left")
 assert.equal(Model.transferSummary(0, 1), "1 sync error")
 
+const groups = Model.tresorGroups([
+  { id: "cloud", synced: false },
+  { id: "local", synced: true },
+  { id: "linked", synced: false }
+])
+assert.deepEqual(groups.synced.map(row => row.id), ["local"])
+assert.deepEqual(groups.notSynced.map(row => row.id), ["cloud", "linked"])
+
 assert.equal(Model.tresorMeta({ synced: false }), "Not synced on this device")
 assert.equal(
   Model.tresorMeta({ synced: false, linkedPath: "/sync/Archive", linkedPathUsable: true }),

@@ -41,6 +41,17 @@ function transferSummary(filesLeft, errors) {
   return "Up to date"
 }
 
+function tresorGroups(tresors) {
+  var synced = []
+  var notSynced = []
+  var rows = Array.isArray(tresors) ? tresors : []
+  for (var i = 0; i < rows.length; i++) {
+    if (rows[i] && rows[i].synced === true) synced.push(rows[i])
+    else if (rows[i]) notSynced.push(rows[i])
+  }
+  return { synced: synced, notSynced: notSynced }
+}
+
 function tresorMeta(tresor) {
   if (!tresor) return ""
   var syncPath = String(tresor.syncPath || "")
@@ -70,6 +81,7 @@ if (typeof module !== "undefined") {
     defaultStatus: defaultStatus,
     parseStatus: parseStatus,
     transferSummary: transferSummary,
+    tresorGroups: tresorGroups,
     tresorMeta: tresorMeta
   }
 }

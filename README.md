@@ -9,6 +9,7 @@ widget.
 - Show whether Tresorit is installed, running, and authenticated.
 - Display current transfer activity and sync errors.
 - List locally available tresors and open their folders.
+- Group tresors into synced and not-synced sections.
 - Start or stop the Tresorit daemon.
 - Choose a local folder and start or stop synchronization for individual tresors.
 - Hand account management off to the Tresorit desktop application.
@@ -38,8 +39,9 @@ omarchy plugin add file:///absolute/path/to/michaelspori.tresorit --enable
 
 - Left-click the bar icon to open the panel.
 - Middle-click it to open Tresorit and right-click it to refresh status.
-- Click a synced tresor to open its local folder, or click a cloud-only tresor
-  to choose its local sync folder.
+- Click a synced or linked tresor to open its local folder. Click an unlinked
+  cloud-only tresor—or one whose previous folder is unavailable—to choose its
+  local sync folder.
 - Use the trailing switch to turn synchronization for that tresor on or off.
 - Use the folder button on a cloud-only tresor to select its local sync folder.
 - Use the folder-with-pencil button on a linked or synced tresor to change its

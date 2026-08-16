@@ -16,6 +16,7 @@ Panel {
   property bool cursorActive: false
   property string focusSection: "header"
   property int rowIndex: 0
+  property string focusedTresorId: ""
   property var pendingTresor: null
   property string pendingSyncPath: ""
   property string pendingAccountKey: ""
@@ -28,6 +29,10 @@ Panel {
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
+  readonly property var tresorGroups: Model.tresorGroups(tresorit.tresors)
+  readonly property var syncedTresors: tresorGroups.synced || []
+  readonly property var notSyncedTresors: tresorGroups.notSynced || []
+  readonly property var displayTresors: syncedTresors.concat(notSyncedTresors)
   readonly property bool restricted: tresorit.restrictionState !== ""
     && tresorit.restrictionState.toLowerCase() !== "normal"
   readonly property color iconColor: tresorit.errors > 0 || restricted
@@ -49,14 +54,28 @@ Panel {
   implicitHeight: button.implicitHeight
 
   function ensureCursor() {
-    if (!tresorit.authenticated || tresorit.tresors.length === 0) focusSection = "header"
-    if (rowIndex >= tresorit.tresors.length) rowIndex = Math.max(0, tresorit.tresors.length - 1)
+    if (!tresorit.authenticated || displayTresors.length === 0) {
+      focusSection = "header"
+      focusedTresorId = ""
+    }
+    if (focusSection === "rows" && focusedTresorId !== "") {
+      for (var i = 0; i < displayTresors.length; i++) {
+        if (String(displayTresors[i].id || "") === focusedTresorId) {
+          rowIndex = i
+          return
+        }
+      }
+    }
+    if (rowIndex >= displayTresors.length) rowIndex = Math.max(0, displayTresors.length - 1)
     if (rowIndex < 0) rowIndex = 0
+    if (focusSection === "rows" && rowIndex < displayTresors.length)
+      focusedTresorId = String(displayTresors[rowIndex].id || "")
   }
 
   function setHeaderCursor() {
     cursorActive = true
     focusSection = "header"
+    focusedTresorId = ""
     if (panelFlick) panelFlick.contentY = 0
   }
 
@@ -64,6 +83,8 @@ Panel {
     cursorActive = true
     focusSection = "rows"
     rowIndex = index
+    focusedTresorId = index >= 0 && index < displayTresors.length
+      ? String(displayTresors[index].id || "") : ""
     scrollCursorIntoView()
   }
 
@@ -76,11 +97,11 @@ Panel {
     ensureCursor()
     if (dy === 0) return
     if (focusSection === "header") {
-      if (dy > 0 && tresorit.tresors.length > 0) setRowCursor(0)
+      if (dy > 0 && displayTresors.length > 0) setRowCursor(0)
       return
     }
     if (dy < 0 && rowIndex === 0) setHeaderCursor()
-    else setRowCursor(Math.max(0, Math.min(tresorit.tresors.length - 1, rowIndex + dy)))
+    else setRowCursor(Math.max(0, Math.min(displayTresors.length - 1, rowIndex + dy)))
   }
 
   function activateCursor() {
@@ -88,14 +109,14 @@ Panel {
     if (focusSection === "header") {
       if (tresorit.installed) tresorit.toggleDaemon()
       else tresorit.openApp()
-    } else if (focusSection === "rows" && rowIndex < tresorit.tresors.length) {
-      activateTresorRow(tresorit.tresors[rowIndex])
+    } else if (focusSection === "rows" && rowIndex < displayTresors.length) {
+      activateTresorRow(displayTresors[rowIndex])
     }
   }
 
   function activateTresorRow(tresor) {
     if (!tresor) return
-    if (tresor.synced === true) tresorit.openTresor(tresor)
+    if (tresor.synced === true || tresor.linkedPathUsable === true) tresorit.openTresor(tresor)
     else chooseSyncFolder(tresor)
   }
 
@@ -108,12 +129,16 @@ Panel {
     pendingFolderOperation = tresor.synced === true ? "move" : "start"
     _folderPickerOutput = ""
     _folderPickerError = ""
+    var currentPath = String(tresor.syncPath || tresor.linkedPath || "")
+    var pickerPath = currentPath !== "" && (tresor.synced === true || tresor.linkedPathUsable === true)
+      ? currentPath.replace(/\/+$/, "") + "/"
+      : Quickshell.env("HOME") + "/"
     folderPickerProcess.command = [
       "zenity",
       "--file-selection",
       "--directory",
       "--title=Choose a sync folder for " + String(tresor.name || "tresor"),
-      "--filename=" + Quickshell.env("HOME") + "/"
+      "--filename=" + pickerPath
     ]
     root.close()
     folderPickerProcess.running = true
@@ -150,6 +175,7 @@ Panel {
     cursorActive = false
     focusSection = "header"
     rowIndex = 0
+    focusedTresorId = ""
     if (panelFlick) panelFlick.contentY = 0
     tresorit.refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
@@ -242,7 +268,7 @@ Panel {
 
   Connections {
     target: tresorit
-    function onTresorsChanged() { root.ensureCursor() }
+    function onTresorsChanged() { Qt.callLater(root.ensureCursor) }
     function onAuthenticatedChanged() { root.ensureCursor() }
   }
 
@@ -301,12 +327,11 @@ Panel {
         if (text === "r" || text === "R") tresorit.refresh()
         else if (text === "o" || text === "O") tresorit.openApp()
         else if ((text === "s" || text === "S") && root.cursorActive
-                 && root.focusSection === "rows" && root.rowIndex < tresorit.tresors.length)
-          root.toggleOrChooseTresor(tresorit.tresors[root.rowIndex])
+                 && root.focusSection === "rows" && root.rowIndex < root.displayTresors.length)
+          root.toggleOrChooseTresor(root.displayTresors[root.rowIndex])
         else if ((text === "f" || text === "F") && root.cursorActive
-                 && root.focusSection === "rows" && root.rowIndex < tresorit.tresors.length
-                 && tresorit.tresors[root.rowIndex].synced !== true)
-          root.chooseSyncFolder(tresorit.tresors[root.rowIndex])
+                 && root.focusSection === "rows" && root.rowIndex < root.displayTresors.length)
+          root.chooseSyncFolder(root.displayTresors[root.rowIndex])
       }
 
       Flickable {
@@ -427,14 +452,8 @@ Panel {
             width: parent.width
             spacing: Style.space(10)
 
-            PanelSectionHeader {
-              text: "TRESORS"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-            }
-
             Text {
-              visible: tresorit.tresors.length === 0
+              visible: root.displayTresors.length === 0
               width: parent.width
               text: "No tresors found."
               color: root.dim
@@ -445,18 +464,39 @@ Panel {
 
             Column {
               id: rowColumn
-              visible: tresorit.tresors.length > 0
+              visible: root.displayTresors.length > 0
               width: parent.width
               spacing: Style.space(10)
 
               Repeater {
-                model: tresorit.tresors
-                TresorRow {
+                model: root.displayTresors
+                Column {
                   required property var modelData
                   required property int index
                   width: rowColumn.width
-                  tresor: modelData
-                  rowNumber: index
+                  spacing: Style.space(10)
+                  readonly property bool startsNotSynced: index === root.syncedTresors.length
+                  readonly property bool startsSection: index === 0 || startsNotSynced
+
+                  PanelSeparator {
+                    visible: startsNotSynced && root.syncedTresors.length > 0
+                    height: visible ? implicitHeight : 0
+                    foreground: root.foreground
+                  }
+
+                  PanelSectionHeader {
+                    visible: startsSection
+                    height: visible ? implicitHeight : 0
+                    text: index < root.syncedTresors.length ? "SYNCED" : "NOT SYNCED"
+                    foreground: root.foreground
+                    fontFamily: root.fontFamily
+                  }
+
+                  TresorRow {
+                    width: parent.width
+                    tresor: parent.modelData
+                    rowNumber: parent.index
+                  }
                 }
               }
             }

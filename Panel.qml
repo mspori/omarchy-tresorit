@@ -47,10 +47,11 @@ Panel {
     : (tresorit.authenticated && tresorit.active ? barForeground : Qt.darker(barForeground, 1.55))
   readonly property string heroMeta: {
     if (!tresorit.installed) return "CLI not installed"
+    if (tresorit.actionStatus !== "") return tresorit.actionStatus
+    if (tresorit.lastError !== "") return tresorit.lastError
     if (!tresorit.running) return "Stopped"
     if (!tresorit.authenticated) return "Login required"
     if (root.restricted) return tresorit.restrictionState
-    if (tresorit.lastError !== "") return "Status unavailable"
     return Model.transferSummary(tresorit.filesLeft, tresorit.errors)
   }
 
@@ -428,16 +429,6 @@ Panel {
                 }
               }
             }
-          }
-
-          Text {
-            visible: tresorit.actionStatus !== "" || tresorit.lastError !== ""
-            width: parent.width
-            text: tresorit.actionStatus !== "" ? tresorit.actionStatus : tresorit.lastError
-            color: tresorit.lastError !== "" && tresorit.actionStatus === "" ? root.urgent : root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            wrapMode: Text.WordWrap
           }
 
           PanelSeparator {

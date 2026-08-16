@@ -571,7 +571,7 @@ Panel {
       }
 
       PanelActionButton {
-        iconText: tresorRow.linked ? "󰣞" : "󰉋"
+        iconText: tresorRow.linked ? "󰣞" : ""
         tooltipText: tresorit.running
           ? (tresorRow.linked ? "Change the sync folder" : "Choose a local sync folder")
           : "Start Tresorit first"

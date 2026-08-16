@@ -80,11 +80,13 @@ def parse_status(raw: str) -> dict[str, object]:
 
     daemon_state = fields["tresorit daemon"]
     daemon_normalized = daemon_state.lower()
-    if daemon_normalized not in ("running", "stopped", "not running"):
+    if daemon_normalized not in ("running", "stopped", "not running", "unreachable"):
         raise ValueError("Tresorit status output contains an unknown daemon state")
 
     account = fields["logged in as"]
     restriction = fields.get("restriction state", "")
+    if restriction == "-":
+        restriction = ""
     drive_mount_path = fields.get("drive mount path", "")
     authenticated = account not in ("", "-")
     running = daemon_normalized == "running"

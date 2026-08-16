@@ -32,13 +32,19 @@ class ParseStatusTests(unittest.TestCase):
         self.assertEqual(parsed["driveMountPath"], "")
 
     def test_stopped_and_logged_out(self):
-        parsed = status.parse_status(
-            "Tresorit daemon:\tstopped\nLogged in as:\t-\nRestriction state:\tNormal\n"
-        )
+        for daemon_state in ("stopped", "not running", "unreachable"):
+            with self.subTest(daemon_state=daemon_state):
+                parsed = status.parse_status(
+                    f"Tresorit daemon:\t{daemon_state}\n"
+                    "Drive mount path:\t-\n"
+                    "Logged in as:\t-\n"
+                    "Restriction state:\t-\n"
+                )
 
-        self.assertFalse(parsed["running"])
-        self.assertFalse(parsed["authenticated"])
-        self.assertEqual(parsed["statusText"], "Stopped")
+                self.assertFalse(parsed["running"])
+                self.assertFalse(parsed["authenticated"])
+                self.assertEqual(parsed["statusText"], "Stopped")
+                self.assertEqual(parsed["restrictionState"], "")
 
     def test_restriction_is_the_visible_state(self):
         parsed = status.parse_status(

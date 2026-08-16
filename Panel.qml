@@ -614,7 +614,6 @@ Panel {
           : "Start Tresorit first"
         foreground: root.foreground
         fontFamily: root.fontFamily
-        enabled: tresorit.running && !tresorit.busy
         Layout.alignment: Qt.AlignVCenter
         onHovered: function(on) { if (on) root.setRowCursor(tresorRow.rowNumber) }
         onClicked: root.chooseSyncFolder(tresorRow.tresor)

@@ -11,6 +11,8 @@ function defaultStatus() {
     restrictionState: "",
     driveMountPath: "",
     tresors: [],
+    activeFiles: [],
+    completedFiles: [],
     filesLeft: 0,
     errors: 0,
     lastError: ""
@@ -24,6 +26,8 @@ function parseStatus(raw) {
     var parsed = JSON.parse(text)
     if (!parsed || typeof parsed !== "object") return defaultStatus()
     parsed.tresors = Array.isArray(parsed.tresors) ? parsed.tresors : []
+    parsed.activeFiles = Array.isArray(parsed.activeFiles) ? parsed.activeFiles : []
+    parsed.completedFiles = Array.isArray(parsed.completedFiles) ? parsed.completedFiles : []
     return parsed
   } catch (error) {
     var failed = defaultStatus()

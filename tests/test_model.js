@@ -8,6 +8,15 @@ const status = Model.parseStatus(JSON.stringify({
 }))
 assert.equal(status.installed, true)
 assert.equal(status.tresors.length, 1)
+assert.deepEqual(status.activeFiles, [])
+assert.deepEqual(status.completedFiles, [])
+
+const filesStatus = Model.parseStatus(JSON.stringify({
+  activeFiles: [{ fileName: "active.txt" }],
+  completedFiles: [{ fileName: "done.txt" }]
+}))
+assert.equal(filesStatus.activeFiles[0].fileName, "active.txt")
+assert.equal(filesStatus.completedFiles[0].fileName, "done.txt")
 
 const malformed = Model.parseStatus("not json")
 assert.equal(malformed.ok, false)

@@ -12,12 +12,15 @@ Item {
   property bool running: false
   property bool authenticated: false
   property bool refreshing: false
+  property bool filePollingActive: false
   property string statusText: "Checking…"
   property string account: ""
   property string accountKey: ""
   property string restrictionState: ""
   property string driveMountPath: ""
   property var tresors: []
+  property var activeFiles: []
+  property var completedFiles: []
   property int filesLeft: 0
   property int errors: 0
   property string actionStatus: ""
@@ -26,10 +29,14 @@ Item {
   property string actionTresorStatus: ""
   property int desiredRunning: -1
   property int desiredTresorSync: -1
+  property var queuedAction: null
 
   readonly property bool active: desiredRunning === -1 ? running : desiredRunning === 1
   readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 30, 10, 3600)
-  readonly property bool busy: statusProcess.running || actionProcess.running
+  readonly property int fileHistoryLimit: intSetting("fileHistoryLimit", 50, 10, 200)
+  readonly property bool actionBlocked: statusProcess.running || actionProcess.running || queuedAction !== null
+  readonly property bool busy: actionBlocked
+  readonly property bool processBusy: actionBlocked || fileStatusProcess.running
   readonly property string helperPath: localPath(Qt.resolvedUrl("status.py"))
 
   property string _actionOutput: ""
@@ -58,10 +65,20 @@ Item {
   }
 
   function refresh() {
-    if (statusProcess.running || helperPath === "") return
+    if (processBusy || helperPath === "") return
     refreshing = true
-    statusProcess.command = ["python3", helperPath, "status"]
+    statusProcess.command = statusCommand()
     statusProcess.running = true
+  }
+
+  function statusCommand() {
+    return ["python3", helperPath, "status", "--history-limit", String(fileHistoryLimit)]
+  }
+
+  function pollFiles() {
+    if (!filePollingActive || processBusy || helperPath === "") return
+    fileStatusProcess.command = statusCommand()
+    fileStatusProcess.running = true
   }
 
   function applyStatus(raw) {
@@ -81,6 +98,10 @@ Item {
     driveMountPath = String(parsed.driveMountPath || "")
     var nextTresors = parsed.tresors || []
     if (JSON.stringify(tresors) !== JSON.stringify(nextTresors)) tresors = nextTresors
+    var nextActiveFiles = parsed.activeFiles || []
+    if (JSON.stringify(activeFiles) !== JSON.stringify(nextActiveFiles)) activeFiles = nextActiveFiles
+    var nextCompletedFiles = parsed.completedFiles || []
+    if (JSON.stringify(completedFiles) !== JSON.stringify(nextCompletedFiles)) completedFiles = nextCompletedFiles
     filesLeft = Math.max(0, Number(parsed.filesLeft || 0))
     errors = Math.max(0, Number(parsed.errors || 0))
 
@@ -96,20 +117,35 @@ Item {
   }
 
   function runAction(arguments, label, tresorId, desired, tresorStatus) {
-    if (!installed || actionProcess.running || helperPath === "") return false
+    if (!installed || actionBlocked || helperPath === "") return false
     _actionOutput = ""
     _actionError = ""
     actionStatus = label || ""
     actionTresorId = tresorId || ""
     actionTresorStatus = tresorStatus || ""
     desiredTresorSync = desired === undefined ? -1 : desired
-    actionProcess.command = ["python3", helperPath].concat(arguments)
-    actionProcess.running = true
+    if (fileStatusProcess.running) {
+      queuedAction = { "arguments": arguments }
+      return true
+    }
+    launchAction(arguments)
     return true
   }
 
+  function launchAction(arguments) {
+    actionProcess.command = ["python3", helperPath].concat(arguments)
+    actionProcess.running = true
+  }
+
+  function launchQueuedAction() {
+    if (queuedAction === null || actionProcess.running || statusProcess.running) return
+    var pending = queuedAction
+    queuedAction = null
+    launchAction(pending.arguments || [])
+  }
+
   function toggleDaemon() {
-    if (!installed || busy) return
+    if (!installed || actionBlocked) return
     if (active) {
       desiredRunning = 0
       runAction(["stop"], "Stopping Tresorit…", "", -1)
@@ -141,7 +177,7 @@ Item {
 
   function requestTresorSync(id, enable) {
     if (!installed) return "not-installed"
-    if (actionProcess.running) return "busy"
+    if (actionBlocked) return "busy"
     if (!running) return "daemon-stopped"
     var tresor = findTresor(id)
     if (!tresor) return "invalid-target"
@@ -164,7 +200,7 @@ Item {
 
   function setTresorFolder(id, path, expectedAccountKey, confirmedOperation) {
     if (!installed) return "not-installed"
-    if (actionProcess.running) return rejectAction("Another Tresorit action is already running", "busy")
+    if (actionBlocked) return rejectAction("Another Tresorit action is already running", "busy")
     if (!running) return rejectAction("Start Tresorit before choosing a sync folder", "daemon-stopped")
     var tresor = findTresor(id)
     if (!tresor)
@@ -225,12 +261,25 @@ Item {
     if (path !== "") Quickshell.execDetached(["uwsm-app", "--", "nautilus", path])
   }
 
+  function openFile(file) {
+    var path = String((file && file.canOpen === true && file.localPath) || "")
+    if (path !== "") Quickshell.execDetached(["uwsm-app", "--", "xdg-open", path])
+  }
+
   Timer {
     interval: root.refreshIntervalSec * 1000
     repeat: true
     running: true
     triggeredOnStart: true
     onTriggered: root.refresh()
+  }
+
+  Timer {
+    interval: 2000
+    repeat: true
+    running: root.filePollingActive
+    triggeredOnStart: true
+    onTriggered: root.pollFiles()
   }
 
   Timer {
@@ -274,6 +323,19 @@ Item {
       root.refreshing = false
       if (exitCode === 0) root.applyStatus(statusStdout.text)
       else root.lastError = root.elide(statusStderr.text || statusStdout.text || "Could not read Tresorit status")
+    }
+  }
+
+  Process {
+    id: fileStatusProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: fileStatusStdout; waitForEnd: true }
+    stderr: StdioCollector { id: fileStatusStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode === 0) root.applyStatus(fileStatusStdout.text)
+      else root.lastError = root.elide(fileStatusStderr.text || fileStatusStdout.text || "Could not read Tresorit status")
+      root.launchQueuedAction()
     }
   }
 

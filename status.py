@@ -15,6 +15,7 @@ import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
@@ -23,8 +24,14 @@ COMMAND_TIMEOUT_SECONDS = 5
 DEFAULT_CLI_PATH = Path.home() / ".local" / "share" / "tresorit" / "tresorit-cli"
 STATE_HOME = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
 STATE_FILE = STATE_HOME / "omarchy" / "michaelspori.tresorit" / "sync-paths.json"
-STATE_VERSION = 1
+STATE_VERSION = 2
+DEFAULT_FILE_HISTORY_LIMIT = 50
+MIN_FILE_HISTORY_LIMIT = 10
+MAX_FILE_HISTORY_LIMIT = 200
+ACTIVE_FILE_STALE_SECONDS = 300
+ACTIVE_FILE_PERSIST_SECONDS = 60
 DISAMBIGUATED_NAME = re.compile(r"^(?P<name>.+) \((?P<id>[^()]+)\)$")
+PERCENT_PROGRESS = re.compile(r"^(?P<value>(?:100(?:\.0+)?|\d{1,2}(?:\.\d+)?))\s*%$")
 
 
 def find_cli() -> str | None:
@@ -172,6 +179,25 @@ def empty_state() -> dict[str, object]:
     return {"version": STATE_VERSION, "accounts": {}}
 
 
+def migrate_state(data: object) -> dict[str, object]:
+    if not isinstance(data, dict) or not isinstance(data.get("accounts"), dict):
+        return empty_state()
+    if data.get("version") == STATE_VERSION:
+        return data
+    if data.get("version") != 1:
+        return empty_state()
+
+    accounts: dict[str, object] = {}
+    for key, paths in data["accounts"].items():
+        if isinstance(key, str) and isinstance(paths, dict):
+            accounts[key] = {
+                "syncPaths": paths,
+                "activeFiles": {},
+                "completedFiles": [],
+            }
+    return {"version": STATE_VERSION, "accounts": accounts}
+
+
 def prepare_state_directory() -> None:
     STATE_FILE.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     STATE_FILE.parent.chmod(0o700)
@@ -198,17 +224,30 @@ def load_state() -> dict[str, object]:
         data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return empty_state()
-    if not isinstance(data, dict) or data.get("version") != STATE_VERSION:
-        return empty_state()
-    accounts = data.get("accounts")
+    return migrate_state(data)
+
+
+def account_state(
+    state: dict[str, object], account: str, create: bool = False
+) -> dict[str, object]:
+    accounts = state.get("accounts")
     if not isinstance(accounts, dict):
-        return empty_state()
-    return data
+        if not create:
+            return {}
+        accounts = {}
+        state["accounts"] = accounts
+    key = account_key(account)
+    value = accounts.get(key)
+    if not isinstance(value, dict):
+        if not create:
+            return {}
+        value = {"syncPaths": {}, "activeFiles": {}, "completedFiles": []}
+        accounts[key] = value
+    return value
 
 
 def remembered_paths(state: dict[str, object], account: str) -> dict[str, str]:
-    accounts = state.get("accounts", {})
-    raw_paths = accounts.get(account_key(account), {}) if isinstance(accounts, dict) else {}
+    raw_paths = account_state(state, account).get("syncPaths", {})
     if not isinstance(raw_paths, dict):
         return {}
     return {
@@ -221,11 +260,7 @@ def remembered_paths(state: dict[str, object], account: str) -> dict[str, str]:
 
 
 def set_remembered_paths(state: dict[str, object], account: str, paths: dict[str, str]) -> None:
-    accounts = state.setdefault("accounts", {})
-    if not isinstance(accounts, dict):
-        accounts = {}
-        state["accounts"] = accounts
-    accounts[account_key(account)] = paths
+    account_state(state, account, create=True)["syncPaths"] = paths
 
 
 def save_state(state: dict[str, object]) -> None:
@@ -270,6 +305,215 @@ def parse_transfers(raw: str) -> dict[str, dict[str, object]]:
     return transfers
 
 
+def parse_progress_percent(progress: str) -> int | float | None:
+    match = PERCENT_PROGRESS.fullmatch(progress.strip())
+    if not match:
+        return None
+    value = float(match.group("value"))
+    if not 0 <= value <= 100:
+        return None
+    return int(value) if value.is_integer() else value
+
+
+def file_key(tresor_id: str, file_name: str) -> str:
+    return hashlib.sha256(f"{tresor_id}\0{file_name}".encode("utf-8")).hexdigest()
+
+
+def safe_local_file(sync_path: str, file_name: str) -> str:
+    if not sync_path or not file_name or "\0" in file_name:
+        return ""
+    try:
+        root = Path(sync_path).resolve(strict=True)
+        supplied = Path(file_name)
+        candidate = supplied if supplied.is_absolute() else root / supplied
+        resolved = candidate.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return ""
+    if not root.is_dir() or not resolved.is_file() or not resolved.is_relative_to(root):
+        return ""
+    return str(resolved)
+
+
+def tresor_for_transfer(
+    tresors: list[dict[str, object]], transfer_name: str
+) -> dict[str, object] | None:
+    raw_matches = [row for row in tresors if str(row["rawName"]) == transfer_name]
+    if len(raw_matches) == 1:
+        return raw_matches[0]
+    name_matches = [row for row in tresors if str(row["name"]) == transfer_name]
+    return name_matches[0] if len(name_matches) == 1 else None
+
+
+def file_row(
+    tresor: dict[str, object], file_name: str, status_text: str = "", progress: str = ""
+) -> dict[str, object]:
+    local_path = safe_local_file(str(tresor.get("syncPath", "")), file_name)
+    return {
+        "key": file_key(str(tresor["id"]), file_name),
+        "tresorId": str(tresor["id"]),
+        "tresorName": str(tresor["name"]),
+        "fileName": file_name,
+        "status": status_text,
+        "progress": progress,
+        "progressPercent": parse_progress_percent(progress),
+        "localPath": local_path,
+        "canOpen": bool(local_path),
+    }
+
+
+def parse_file_transfers(
+    raw: str, tresors: list[dict[str, object]]
+) -> list[dict[str, object]]:
+    files: list[dict[str, object]] = []
+    for transfer_name, file_name, status_text, progress in tab_rows(raw, 4):
+        tresor = tresor_for_transfer(tresors, transfer_name)
+        if tresor is None or not file_name:
+            continue
+        files.append(file_row(tresor, file_name, status_text, progress))
+    return files
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def parse_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else None
+
+
+def completed_file_rows(
+    state: dict[str, object],
+    account: str,
+    tresors: list[dict[str, object]],
+    history_limit: int = DEFAULT_FILE_HISTORY_LIMIT,
+    active_keys: set[str] | None = None,
+) -> list[dict[str, object]]:
+    active_keys = active_keys or set()
+    stored = account_state(state, account).get("completedFiles", [])
+    if not isinstance(stored, list):
+        return []
+    by_id = {str(row["id"]): row for row in tresors}
+    rows: list[dict[str, object]] = []
+    for item in stored[:history_limit]:
+        if not isinstance(item, dict):
+            continue
+        tresor_id = item.get("tresorId")
+        file_name = item.get("fileName")
+        completed_at = item.get("completedAt")
+        if not all(isinstance(value, str) and value for value in (tresor_id, file_name, completed_at)):
+            continue
+        key = file_key(tresor_id, file_name)
+        if key in active_keys:
+            continue
+        tresor = by_id.get(tresor_id)
+        local_root = ""
+        if tresor is not None:
+            local_root = str(tresor.get("syncPath", ""))
+            if not local_root and tresor.get("linkedPathUsable") is True:
+                local_root = str(tresor.get("linkedPath", ""))
+        local_path = (
+            safe_local_file(local_root, file_name)
+            if tresor is not None
+            else ""
+        )
+        rows.append(
+            {
+                "key": key,
+                "tresorId": tresor_id,
+                "tresorName": str(item.get("tresorName", tresor_id)),
+                "fileName": file_name,
+                "completedAt": completed_at,
+                "localPath": local_path,
+                "canOpen": bool(local_path),
+            }
+        )
+    return rows
+
+
+def reconcile_file_history(
+    state: dict[str, object],
+    account: str,
+    tresors: list[dict[str, object]],
+    active_files: list[dict[str, object]],
+    now: datetime | None = None,
+    history_limit: int = DEFAULT_FILE_HISTORY_LIMIT,
+) -> None:
+    now = now or utc_now()
+    bucket = account_state(state, account, create=True)
+    previous = bucket.get("activeFiles", {})
+    history = bucket.get("completedFiles", [])
+    if not isinstance(previous, dict):
+        previous = {}
+    if not isinstance(history, list):
+        history = []
+
+    current_keys = {str(row["key"]) for row in active_files}
+    tresors_by_id = {str(row["id"]): row for row in tresors}
+    additions: list[dict[str, object]] = []
+    for key, item in previous.items():
+        if key in current_keys or not isinstance(item, dict):
+            continue
+        last_seen = parse_timestamp(item.get("lastSeenAt"))
+        tresor_id = item.get("tresorId")
+        file_name = item.get("fileName")
+        tresor = tresors_by_id.get(tresor_id) if isinstance(tresor_id, str) else None
+        age = (now - last_seen).total_seconds() if last_seen is not None else -1
+        transfer_status = str(tresor.get("status", "")).strip().lower() if tresor else ""
+        if (
+            last_seen is None
+            or age < 0
+            or age > ACTIVE_FILE_STALE_SECONDS
+            or tresor is None
+            or tresor.get("synced") is not True
+            or int(tresor.get("errors", 0)) != 0
+            or transfer_status in ("", "unknown")
+            or not isinstance(file_name, str)
+            or not file_name
+        ):
+            continue
+        additions.append(
+            {
+                "key": file_key(tresor_id, file_name),
+                "tresorId": tresor_id,
+                "tresorName": str(item.get("tresorName", tresor["name"])),
+                "fileName": file_name,
+                "completedAt": now.isoformat().replace("+00:00", "Z"),
+            }
+        )
+
+    addition_keys = {str(item["key"]) for item in additions}
+    next_history = additions + [
+        item
+        for item in history
+        if isinstance(item, dict) and str(item.get("key", "")) not in addition_keys
+    ]
+    bucket["completedFiles"] = next_history[:history_limit]
+    observed_at = now.isoformat().replace("+00:00", "Z")
+    next_active: dict[str, object] = {}
+    for row in active_files:
+        key = str(row["key"])
+        last_seen_at = observed_at
+        old_item = previous.get(key)
+        if isinstance(old_item, dict):
+            old_seen = parse_timestamp(old_item.get("lastSeenAt"))
+            old_age = (now - old_seen).total_seconds() if old_seen is not None else -1
+            if 0 <= old_age < ACTIVE_FILE_PERSIST_SECONDS:
+                last_seen_at = str(old_item["lastSeenAt"])
+        next_active[key] = {
+            "tresorId": str(row["tresorId"]),
+            "tresorName": str(row["tresorName"]),
+            "fileName": str(row["fileName"]),
+            "lastSeenAt": last_seen_at,
+        }
+    bucket["activeFiles"] = next_active
+
+
 def merge_transfers(
     tresors: list[dict[str, object]], transfers: dict[str, dict[str, object]]
 ) -> list[dict[str, object]]:
@@ -295,12 +539,17 @@ def unavailable_status(message: str = "Tresorit CLI is not installed") -> dict[s
         "restrictionState": "",
         "driveMountPath": "",
         "tresors": [],
+        "activeFiles": [],
+        "completedFiles": [],
         "filesLeft": 0,
         "errors": 0,
     }
 
 
-def collect_status(cli: str) -> dict[str, object]:
+def collect_status(
+    cli: str, history_limit: int = DEFAULT_FILE_HISTORY_LIMIT
+) -> dict[str, object]:
+    history_limit = max(MIN_FILE_HISTORY_LIMIT, min(MAX_FILE_HISTORY_LIMIT, history_limit))
     status_exit, status_output, status_error = run_cli(cli, ["-p", "status"])
     if status_exit != 0:
         result = unavailable_status("Tresorit is unavailable")
@@ -322,13 +571,20 @@ def collect_status(cli: str) -> dict[str, object]:
     result["installed"] = True
 
     if not result["running"] or not result["authenticated"]:
+        if result["authenticated"]:
+            with state_lock():
+                result["completedFiles"] = completed_file_rows(
+                    load_state(), str(result["account"]), [], history_limit
+                )
         return result
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
+    with ThreadPoolExecutor(max_workers=3) as executor:
         tresors_future = executor.submit(run_cli, cli, ["-p", "tresors"])
         transfers_future = executor.submit(run_cli, cli, ["-p", "transfers"])
+        files_future = executor.submit(run_cli, cli, ["-p", "transfers", "--files"])
         tresors_exit, tresors_output, tresors_error = tresors_future.result()
         transfers_exit, transfers_output, transfers_error = transfers_future.result()
+        files_exit, files_output, files_error = files_future.result()
 
     if tresors_exit != 0:
         result["ok"] = False
@@ -336,10 +592,12 @@ def collect_status(cli: str) -> dict[str, object]:
         result["lastError"] = tresors_error or tresors_output or "Could not list tresors"
         return result
 
+    transfers = parse_transfers(transfers_output) if transfers_exit == 0 else {}
     account = str(result["account"])
     state_error = ""
     with state_lock():
         state = load_state()
+        state_before = json.dumps(state, ensure_ascii=False, sort_keys=True)
         account_paths = remembered_paths(state, account)
         tresors = parse_tresors(tresors_output, account_paths)
         known_ids = {str(row["id"]) for row in tresors}
@@ -357,18 +615,42 @@ def collect_status(cli: str) -> dict[str, object]:
         )
         if next_paths != account_paths:
             set_remembered_paths(state, account, next_paths)
+        for row in tresors:
+            identifier = str(row["id"])
+            row["canStart"] = row["synced"] or row["linkedPathUsable"]
+            row["canStop"] = row["synced"] and next_paths.get(identifier) == row["syncPath"]
+        tresors = merge_transfers(tresors, transfers)
+        active_files = parse_file_transfers(files_output, tresors) if files_exit == 0 else []
+        if files_exit == 0 and transfers_exit == 0:
+            reconcile_file_history(
+                state, account, tresors, active_files, history_limit=history_limit
+            )
+        bucket = account_state(state, account, create=True)
+        stored_history = bucket.get("completedFiles", [])
+        if isinstance(stored_history, list) and len(stored_history) > history_limit:
+            bucket["completedFiles"] = stored_history[:history_limit]
+        state_changed = (
+            json.dumps(state, ensure_ascii=False, sort_keys=True) != state_before
+        )
+        if state_changed:
             try:
                 save_state(state)
             except OSError as error:
-                state_error = f"Could not safely remember sync folders: {error.strerror or error}"
-        if not state_error:
-            for row in tresors:
-                identifier = str(row["id"])
-                row["canStart"] = row["synced"] or row["linkedPathUsable"]
-                row["canStop"] = row["synced"] and next_paths.get(identifier) == row["syncPath"]
+                state_error = f"Could not safely save Tresorit state: {error.strerror or error}"
+                if next_paths != account_paths:
+                    for row in tresors:
+                        row["canStop"] = False
+        completed_files = completed_file_rows(
+            state,
+            account,
+            tresors,
+            history_limit=history_limit,
+            active_keys={str(row["key"]) for row in active_files},
+        )
 
-    transfers = parse_transfers(transfers_output) if transfers_exit == 0 else {}
-    result["tresors"] = merge_transfers(tresors, transfers)
+    result["tresors"] = tresors
+    result["activeFiles"] = active_files
+    result["completedFiles"] = completed_files
     result["filesLeft"] = sum(int(row["filesLeft"]) for row in result["tresors"])
     result["errors"] = sum(int(row["errors"]) for row in result["tresors"])
     if state_error:
@@ -377,6 +659,9 @@ def collect_status(cli: str) -> dict[str, object]:
     elif transfers_exit != 0:
         result["ok"] = False
         result["lastError"] = transfers_error or transfers_output or "Could not read transfers"
+    elif files_exit != 0:
+        result["ok"] = False
+        result["lastError"] = files_error or files_output or "Could not read file transfers"
     return result
 
 
@@ -690,6 +975,12 @@ def argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("target", nargs="?")
     parser.add_argument("path", nargs="?")
     parser.add_argument("account_key", nargs="?")
+    parser.add_argument(
+        "--history-limit",
+        type=int,
+        default=DEFAULT_FILE_HISTORY_LIMIT,
+        help="Maximum completed file entries to retain (10-200)",
+    )
     return parser
 
 
@@ -704,7 +995,11 @@ def main() -> int:
         return 127
 
     if arguments.action == "status":
-        print(json.dumps(collect_status(cli), ensure_ascii=False))
+        print(
+            json.dumps(
+                collect_status(cli, arguments.history_limit), ensure_ascii=False
+            )
+        )
         return 0
     return perform_action(
         cli,

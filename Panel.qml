@@ -14,9 +14,13 @@ Panel {
   manageIpc: false
 
   property bool cursorActive: false
+  property int selectedTabIndex: 0
   property string focusSection: "header"
   property int rowIndex: 0
+  property int fileRowIndex: 0
+  property int reconciledActiveFileCount: 0
   property string focusedTresorId: ""
+  property string focusedFileKey: ""
   property var pendingTresor: null
   property string pendingSyncPath: ""
   property string pendingAccountKey: ""
@@ -24,6 +28,7 @@ Panel {
   property string _folderPickerOutput: ""
   property string _folderPickerError: ""
   property string _confirmSyncError: ""
+  property bool _fileReconcilePending: false
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
@@ -33,6 +38,10 @@ Panel {
   readonly property var syncedTresors: tresorGroups.synced || []
   readonly property var notSyncedTresors: tresorGroups.notSynced || []
   readonly property var displayTresors: syncedTresors.concat(notSyncedTresors)
+  readonly property var activeFiles: tresorit.activeFiles || []
+  readonly property var completedFiles: tresorit.completedFiles || []
+  readonly property var displayFiles: activeFiles.concat(completedFiles)
+  onDisplayFilesChanged: scheduleFileReconcile()
   onDisplayTresorsChanged: {
     reconcileTresorRows()
     ensureCursor()
@@ -59,9 +68,19 @@ Panel {
   implicitHeight: button.implicitHeight
 
   function ensureCursor() {
-    if (!tresorit.authenticated || displayTresors.length === 0) {
+    if (!tresorit.authenticated) {
       focusSection = "header"
       focusedTresorId = ""
+      focusedFileKey = ""
+      return
+    }
+    if ((selectedTabIndex === 0 && focusSection === "files")
+        || (selectedTabIndex === 1 && focusSection === "rows")) {
+      focusSection = "tabs"
+    }
+    if ((focusSection === "rows" && displayTresors.length === 0)
+        || (focusSection === "files" && displayFiles.length === 0)) {
+      focusSection = "tabs"
     }
     if (focusSection === "rows" && focusedTresorId !== "") {
       for (var i = 0; i < displayTresors.length; i++) {
@@ -71,10 +90,22 @@ Panel {
         }
       }
     }
+    if (focusSection === "files" && focusedFileKey !== "") {
+      for (var fileIndex = 0; fileIndex < displayFiles.length; fileIndex++) {
+        if (String(displayFiles[fileIndex].key || "") === focusedFileKey) {
+          fileRowIndex = fileIndex
+          return
+        }
+      }
+    }
     if (rowIndex >= displayTresors.length) rowIndex = Math.max(0, displayTresors.length - 1)
     if (rowIndex < 0) rowIndex = 0
+    if (fileRowIndex >= displayFiles.length) fileRowIndex = Math.max(0, displayFiles.length - 1)
+    if (fileRowIndex < 0) fileRowIndex = 0
     if (focusSection === "rows" && rowIndex < displayTresors.length)
       focusedTresorId = String(displayTresors[rowIndex].id || "")
+    if (focusSection === "files" && fileRowIndex < displayFiles.length)
+      focusedFileKey = String(displayFiles[fileRowIndex].key || "")
   }
 
   function reconcileTresorRows() {
@@ -104,10 +135,61 @@ Panel {
       tresorRowModel.remove(tresorRowModel.count - 1)
   }
 
+  function reconcileFileRows(model, desired) {
+    for (var targetIndex = 0; targetIndex < desired.length; targetIndex++) {
+      var file = desired[targetIndex]
+      var stableKey = String(file.key || "")
+      var currentIndex = -1
+
+      for (var candidateIndex = targetIndex; candidateIndex < model.count; candidateIndex++) {
+        if (String(model.get(candidateIndex).stableKey || "") === stableKey) {
+          currentIndex = candidateIndex
+          break
+        }
+      }
+
+      if (currentIndex < 0) {
+        model.insert(targetIndex, { "stableKey": stableKey, "file": file })
+      } else {
+        if (currentIndex !== targetIndex) model.move(currentIndex, targetIndex, 1)
+        model.setProperty(targetIndex, "file", file)
+      }
+    }
+
+    while (model.count > desired.length) model.remove(model.count - 1)
+  }
+
+  function reconcileFiles() {
+    reconcileFileRows(fileRowModel, displayFiles)
+    reconciledActiveFileCount = activeFiles.length
+    ensureCursor()
+  }
+
+  function scheduleFileReconcile() {
+    if (_fileReconcilePending) return
+    _fileReconcilePending = true
+    Qt.callLater(function() {
+      _fileReconcilePending = false
+      reconcileFiles()
+    })
+  }
+
+  function selectTab(index) {
+    var nextIndex = Math.max(0, Math.min(1, index))
+    if (selectedTabIndex === nextIndex && focusSection === "tabs") return
+    selectedTabIndex = nextIndex
+    focusSection = "tabs"
+    focusedTresorId = ""
+    focusedFileKey = ""
+    if (panelFlick) panelFlick.contentY = 0
+    if (nextIndex === 1) tresorit.refresh()
+  }
+
   function setHeaderCursor() {
     cursorActive = true
     focusSection = "header"
     focusedTresorId = ""
+    focusedFileKey = ""
     if (panelFlick) panelFlick.contentY = 0
   }
 
@@ -117,6 +199,17 @@ Panel {
     rowIndex = index
     focusedTresorId = index >= 0 && index < displayTresors.length
       ? String(displayTresors[index].id || "") : ""
+    focusedFileKey = ""
+    scrollCursorIntoView()
+  }
+
+  function setFileCursor(index) {
+    cursorActive = true
+    focusSection = "files"
+    fileRowIndex = index
+    focusedFileKey = index >= 0 && index < displayFiles.length
+      ? String(displayFiles[index].key || "") : ""
+    focusedTresorId = ""
     scrollCursorIntoView()
   }
 
@@ -127,13 +220,30 @@ Panel {
       return
     }
     ensureCursor()
-    if (dy === 0) return
-    if (focusSection === "header") {
-      if (dy > 0 && displayTresors.length > 0) setRowCursor(0)
+    if (dx !== 0 && tresorit.authenticated) {
+      selectTab(dx > 0 ? 1 : 0)
       return
     }
-    if (dy < 0 && rowIndex === 0) setHeaderCursor()
-    else setRowCursor(Math.max(0, Math.min(displayTresors.length - 1, rowIndex + dy)))
+    if (dy === 0) return
+    if (focusSection === "header") {
+      if (dy > 0 && tresorit.authenticated) focusSection = "tabs"
+      return
+    }
+    if (focusSection === "tabs") {
+      if (dy < 0) setHeaderCursor()
+      else if (selectedTabIndex === 0 && displayTresors.length > 0) setRowCursor(0)
+      else if (selectedTabIndex === 1 && displayFiles.length > 0) setFileCursor(0)
+      return
+    }
+    if (focusSection === "rows") {
+      if (dy < 0 && rowIndex === 0) focusSection = "tabs"
+      else setRowCursor(Math.max(0, Math.min(displayTresors.length - 1, rowIndex + dy)))
+      return
+    }
+    if (focusSection === "files") {
+      if (dy < 0 && fileRowIndex === 0) focusSection = "tabs"
+      else setFileCursor(Math.max(0, Math.min(displayFiles.length - 1, fileRowIndex + dy)))
+    }
   }
 
   function activateCursor() {
@@ -143,6 +253,8 @@ Panel {
       else tresorit.openApp()
     } else if (focusSection === "rows" && rowIndex < displayTresors.length) {
       activateTresorRow(displayTresors[rowIndex])
+    } else if (focusSection === "files" && fileRowIndex < displayFiles.length) {
+      tresorit.openFile(displayFiles[fileRowIndex])
     }
   }
 
@@ -150,6 +262,30 @@ Panel {
     if (!tresor) return
     if (tresor.synced === true || tresor.linkedPathUsable === true) tresorit.openTresor(tresor)
     else chooseSyncFolder(tresor)
+  }
+
+  function activeFileMeta(file) {
+    if (!file) return ""
+    var parts = []
+    var tresorName = String(file.tresorName || "").trim()
+    var status = String(file.status || "").trim()
+    var progress = String(file.progress || "").trim()
+    if (tresorName !== "") parts.push(tresorName)
+    if (status !== "" && status !== "-") parts.push(status)
+    if (progress !== "" && progress !== "-" && progress !== status) parts.push(progress)
+    return parts.join(" · ")
+  }
+
+  function completedFileMeta(file) {
+    if (!file) return ""
+    var parts = []
+    var tresorName = String(file.tresorName || "").trim()
+    if (tresorName !== "") parts.push(tresorName)
+    var timestamp = String(file.completedAt || "")
+    var completed = new Date(timestamp)
+    if (timestamp !== "" && !isNaN(completed.getTime()))
+      parts.push(Qt.formatDateTime(completed, "dd.MM.yyyy · HH:mm"))
+    return parts.join(" · ")
   }
 
   function chooseSyncFolder(tresor) {
@@ -190,8 +326,11 @@ Panel {
   }
 
   function scrollCursorIntoView() {
-    if (!panelFlick || focusSection !== "rows" || rowIndex >= rowColumn.children.length) return
-    var item = rowColumn.children[rowIndex]
+    if (!panelFlick) return
+    var item = null
+    if (focusSection === "rows") item = tresorRepeater.itemAt(rowIndex)
+    else if (focusSection === "files") item = fileRepeater.itemAt(fileRowIndex)
+    if (!item) return
     Qt.callLater(function() {
       if (!item) return
       var point = item.mapToItem(panelFlick.contentItem, 0, 0)
@@ -205,9 +344,12 @@ Panel {
 
   onOpenedChanged: if (opened) {
     cursorActive = false
+    selectedTabIndex = 0
     focusSection = "header"
     rowIndex = 0
+    fileRowIndex = 0
     focusedTresorId = ""
+    focusedFileKey = ""
     if (panelFlick) panelFlick.contentY = 0
     tresorit.refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
@@ -216,10 +358,16 @@ Panel {
   Service {
     id: tresorit
     settings: root.settings
+    filePollingActive: root.opened && root.selectedTabIndex === 1
   }
 
   ListModel {
     id: tresorRowModel
+    dynamicRoles: true
+  }
+
+  ListModel {
+    id: fileRowModel
     dynamicRoles: true
   }
 
@@ -308,7 +456,10 @@ Panel {
     function onAuthenticatedChanged() { root.ensureCursor() }
   }
 
-  Component.onCompleted: reconcileTresorRows()
+  Component.onCompleted: {
+    reconcileTresorRows()
+    reconcileFiles()
+  }
 
   IpcHandler {
     target: root.ipcTarget
@@ -381,7 +532,7 @@ Panel {
         boundsBehavior: Flickable.StopAtBounds
         flickableDirection: Flickable.VerticalFlick
         interactive: contentHeight > height
-        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AlwaysOff }
 
         Column {
           id: column
@@ -426,6 +577,60 @@ Panel {
                     text: tresorit.active ? "Stop Tresorit" : "Start Tresorit"
                     fontFamily: root.fontFamily
                   }
+                }
+              }
+            }
+          }
+
+          Row {
+            id: tabSwitch
+            visible: tresorit.authenticated
+            width: parent.width
+            spacing: Style.spacing.md
+            readonly property real cellWidth: (width - spacing) / 2
+
+            Button {
+              width: tabSwitch.cellWidth
+              text: "Tresors"
+              selected: root.selectedTabIndex === 0
+              hasCursor: root.cursorActive && root.focusSection === "tabs"
+                && root.selectedTabIndex === 0
+              bordered: true
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              fontSize: Style.font.bodySmall
+              verticalPadding: Style.spacing.controlPaddingY
+              onClicked: {
+                root.cursorActive = true
+                root.selectTab(0)
+              }
+              onHovered: function(isHovered) {
+                if (isHovered) {
+                  root.cursorActive = true
+                  root.focusSection = "tabs"
+                }
+              }
+            }
+
+            Button {
+              width: tabSwitch.cellWidth
+              text: "Files"
+              selected: root.selectedTabIndex === 1
+              hasCursor: root.cursorActive && root.focusSection === "tabs"
+                && root.selectedTabIndex === 1
+              bordered: true
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              fontSize: Style.font.bodySmall
+              verticalPadding: Style.spacing.controlPaddingY
+              onClicked: {
+                root.cursorActive = true
+                root.selectTab(1)
+              }
+              onHovered: function(isHovered) {
+                if (isHovered) {
+                  root.cursorActive = true
+                  root.focusSection = "tabs"
                 }
               }
             }
@@ -476,7 +681,7 @@ Panel {
           }
 
           Column {
-            visible: tresorit.authenticated
+            visible: tresorit.authenticated && root.selectedTabIndex === 0
             width: parent.width
             spacing: Style.space(10)
 
@@ -497,6 +702,7 @@ Panel {
               spacing: Style.space(10)
 
               Repeater {
+                id: tresorRepeater
                 model: tresorRowModel
                 Column {
                   required property var tresor
@@ -528,6 +734,146 @@ Panel {
                 }
               }
             }
+          }
+
+          Column {
+            visible: tresorit.authenticated && root.selectedTabIndex === 1
+            width: parent.width
+            spacing: Style.space(10)
+
+            Text {
+              visible: root.displayFiles.length === 0
+              width: parent.width
+              text: "No file activity observed yet."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              horizontalAlignment: Text.AlignHCenter
+            }
+
+            Column {
+              id: fileRowItems
+              visible: root.displayFiles.length > 0
+              width: parent.width
+              spacing: Style.space(10)
+
+              Repeater {
+                id: fileRepeater
+                model: fileRowModel
+
+                Column {
+                  required property var file
+                  required property int index
+                  width: fileRowItems.width
+                  spacing: Style.space(10)
+                  readonly property bool startsCompleted: index === root.reconciledActiveFileCount
+                  readonly property bool startsSection: index === 0 || startsCompleted
+                  readonly property bool transferring: index < root.reconciledActiveFileCount
+
+                  PanelSeparator {
+                    visible: startsCompleted && root.reconciledActiveFileCount > 0
+                    height: visible ? implicitHeight : 0
+                    foreground: root.foreground
+                  }
+
+                  PanelSectionHeader {
+                    visible: startsSection
+                    height: visible ? implicitHeight : 0
+                    text: parent.transferring ? "SYNCING" : "RECENTLY SYNCED"
+                    foreground: root.foreground
+                    fontFamily: root.fontFamily
+                  }
+
+                  FileRow {
+                    width: parent.width
+                    file: parent.file
+                    transferring: parent.transferring
+                    rowNumber: parent.index
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  component FileRow: CursorSurface {
+    id: fileRow
+    property var file: null
+    property bool transferring: false
+    property int rowNumber: 0
+    readonly property real progressPercent: file && file.progressPercent !== undefined
+      && file.progressPercent !== null && isFinite(Number(file.progressPercent))
+      ? Number(file.progressPercent) : -1
+
+    hasCursor: root.cursorActive && root.focusSection === "files" && root.fileRowIndex === rowNumber
+    current: transferring
+    foreground: root.foreground
+    implicitHeight: fileContent.implicitHeight + Style.space(12)
+
+    MouseArea {
+      anchors.fill: parent
+      hoverEnabled: true
+      cursorShape: fileRow.file && fileRow.file.canOpen === true
+        ? Qt.PointingHandCursor : Qt.ArrowCursor
+      onEntered: root.setFileCursor(fileRow.rowNumber)
+      onClicked: tresorit.openFile(fileRow.file)
+    }
+
+    RowLayout {
+      id: fileContent
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      anchors.leftMargin: Style.space(10)
+      anchors.rightMargin: Style.space(10)
+      spacing: Style.space(8)
+
+      Text {
+        text: "󰈔"
+        color: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.icon
+        Layout.alignment: Qt.AlignVCenter
+      }
+
+      ColumnLayout {
+        Layout.fillWidth: true
+        spacing: Style.space(2)
+
+        Text {
+          Layout.fillWidth: true
+          text: String((fileRow.file && fileRow.file.fileName) || "Unnamed file")
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          elide: Text.ElideMiddle
+        }
+
+        Text {
+          Layout.fillWidth: true
+          text: fileRow.transferring
+            ? root.activeFileMeta(fileRow.file) : root.completedFileMeta(fileRow.file)
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          elide: Text.ElideRight
+        }
+
+        Rectangle {
+          visible: fileRow.transferring && fileRow.progressPercent >= 0
+          Layout.fillWidth: true
+          Layout.preferredHeight: Style.space(2)
+          color: Qt.rgba(root.dim.r, root.dim.g, root.dim.b, 0.28)
+          radius: height / 2
+
+          Rectangle {
+            width: parent.width * Math.max(0, Math.min(100, fileRow.progressPercent)) / 100
+            height: parent.height
+            color: root.foreground
+            radius: parent.radius
           }
         }
       }

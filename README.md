@@ -8,6 +8,8 @@ widget.
 
 - Show whether Tresorit is installed, running, and authenticated.
 - Display current transfer activity and sync errors.
+- Show files currently being processed, including Tresorit's status and progress.
+- Keep a private, bounded history of files whose completion the plugin observed.
 - List locally available tresors and open their folders.
 - Group tresors into synced and not-synced sections.
 - Start or stop the Tresorit daemon.
@@ -42,6 +44,9 @@ omarchy plugin add file:///absolute/path/to/michaelspori.tresorit --enable
 - Click a synced or linked tresor to open its local folder. Click an unlinked
   cloud-only tresor—or one whose previous folder is unavailable—to choose its
   local sync folder.
+- Switch between the **Tresors** and **Files** tabs with the mouse or Left/Right.
+  The Files tab shows active transfers and the most recently observed completed
+  files; click a resolvable file to open it in its default application.
 - Use the trailing switch to turn synchronization for that tresor on or off.
 - Use the folder button on a cloud-only tresor to select its local sync folder.
 - Use the folder-with-pencil button on a linked or synced tresor to change its
@@ -51,9 +56,19 @@ omarchy plugin add file:///absolute/path/to/michaelspori.tresorit --enable
   all Tresorit synchronization and Tresorit Drive; it is separate from the
   per-tresor switches.
 
-The panel supports arrow-key navigation, Enter to open the selected tresor,
+The panel supports arrow-key navigation, Enter to open the selected tresor or file,
 `S` to change its sync selection, `F` to choose or change its local folder,
 `R` to refresh, and `O` to open Tresorit.
+
+Tresorit's CLI only reports files that are currently being processed; it does
+not provide completed-file history or completion timestamps. The plugin records
+a file as previously synced when it disappears from a later successful transfer
+poll while its tresor remains healthy and synced. The displayed time is therefore
+the time completion was observed locally, and transfers completed while the
+plugin is not polling may be absent. File paths are opened only when they resolve
+to an existing file inside the tresor's current local sync folder.
+The **Synced file history** plugin setting controls how many completed entries
+are retained, from 10 to 200 (50 by default). Active transfers are never limited.
 
 ### Sync-folder safety
 

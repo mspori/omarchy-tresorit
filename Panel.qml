@@ -639,7 +639,7 @@ Panel {
           }
 
           CursorSurface {
-            visible: !tresorit.authenticated
+            visible: !tresorit.installed || (tresorit.running && !tresorit.authenticated)
             width: parent.width
             foreground: root.foreground
             implicitHeight: loginRow.implicitHeight + Style.space(12)

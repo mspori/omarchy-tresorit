@@ -178,10 +178,10 @@ Item {
       return rejectAction("The selected sync setup is no longer valid", "invalid-target")
     var launched = runAction(
       [operation === "move" ? "sync-move" : "sync-start-at", targetId, localFolder, accountFingerprint],
-      operation === "move" ? "Moving tresor sync…" : "Starting tresor sync…",
+      operation === "move" ? "Changing tresor folder…" : "Starting tresor sync…",
       targetId,
       1,
-      operation === "move" ? "Moving sync…" : "Starting sync…"
+      operation === "move" ? "Changing folder…" : "Starting sync…"
     )
     return launched ? "queued" : "busy"
   }

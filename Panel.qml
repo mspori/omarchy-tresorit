@@ -472,6 +472,12 @@ Panel {
     function status(): string { return tresorit.statusText }
     function startSync(id: string): string { return tresorit.requestTresorSync(id, true) }
     function stopSync(id: string): string { return tresorit.requestTresorSync(id, false) }
+    function probeAction(): string {
+      return tresorit.runAction(
+        ["status", "probe-target", "probe-path", "probe-key"],
+        "Checking action queue…", "", -1, ""
+      ) ? "queued" : "blocked"
+    }
   }
 
   BarIconButton {

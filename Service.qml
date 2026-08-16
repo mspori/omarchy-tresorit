@@ -116,7 +116,7 @@ Item {
     }
   }
 
-  function runAction(arguments, label, tresorId, desired, tresorStatus) {
+  function runAction(actionArguments, label, tresorId, desired, tresorStatus) {
     if (!installed || actionBlocked || helperPath === "") return false
     _actionOutput = ""
     _actionError = ""
@@ -126,17 +126,20 @@ Item {
     desiredTresorSync = desired === undefined ? -1 : desired
     if (statusProcess.running || fileStatusProcess.running) {
       var queuedArguments = []
-      for (var i = 0; i < arguments.length; i++)
-        queuedArguments.push(String(arguments[i]))
+      for (var i = 0; i < actionArguments.length; i++)
+        queuedArguments.push(String(actionArguments[i]))
       queuedAction = queuedArguments
       return true
     }
-    launchAction(arguments)
+    launchAction(actionArguments)
     return true
   }
 
-  function launchAction(arguments) {
-    actionProcess.command = ["python3", helperPath].concat(arguments)
+  function launchAction(actionArguments) {
+    var command = ["python3", helperPath]
+    for (var i = 0; i < actionArguments.length; i++)
+      command.push(String(actionArguments[i]))
+    actionProcess.command = command
     actionProcess.running = true
   }
 

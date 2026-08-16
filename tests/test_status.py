@@ -3,7 +3,7 @@ import io
 import json
 import tempfile
 import unittest
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
@@ -22,6 +22,7 @@ class ParseStatusTests(unittest.TestCase):
         parser = status.argument_parser()
         cases = (
             (["status", "--history-limit", "50"], "status"),
+            (["login"], "login"),
             (["stop"], "stop"),
             (["sync-start", "folder-id"], "sync-start"),
             (["sync-stop", "folder-id"], "sync-stop"),
@@ -31,6 +32,32 @@ class ParseStatusTests(unittest.TestCase):
             with self.subTest(arguments=arguments):
                 parsed = parser.parse_args(arguments)
                 self.assertEqual(parsed.action, expected_action)
+
+    def test_interactive_password_login_keeps_password_out_of_arguments(self):
+        with mock.patch("builtins.input", side_effect=["", "person@example.test"]):
+            with mock.patch.object(status.subprocess, "call", return_value=0) as call:
+                with redirect_stdout(io.StringIO()):
+                    exit_code = status.interactive_login("tresorit-cli")
+
+        self.assertEqual(exit_code, 0)
+        call.assert_called_once_with(
+            [
+                "tresorit-cli",
+                "login",
+                "--email",
+                "person@example.test",
+                "--password-on-stdin",
+            ]
+        )
+
+    def test_interactive_sso_login_uses_cli_sso(self):
+        with mock.patch("builtins.input", return_value="2"):
+            with mock.patch.object(status.subprocess, "call", return_value=0) as call:
+                with redirect_stdout(io.StringIO()):
+                    exit_code = status.interactive_login("tresorit-cli")
+
+        self.assertEqual(exit_code, 0)
+        call.assert_called_once_with(["tresorit-cli", "login", "--sso"])
 
     def test_logged_in_running_account(self):
         parsed = status.parse_status(

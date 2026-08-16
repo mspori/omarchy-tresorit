@@ -258,8 +258,20 @@ Item {
     return tresor.synced === true ? tresor.canStop === true : tresor.canStart === true
   }
 
-  function openApp() {
-    Quickshell.execDetached(["uwsm-app", "--", "gtk-launch", "tresorit"])
+  function login() {
+    if (!installed || !running || authenticated || helperPath === "") return
+    Quickshell.execDetached([
+      "uwsm-app",
+      "--",
+      "xdg-terminal-exec",
+      "--app-id=org.omarchy.terminal",
+      "--title=Tresorit Login",
+      "--hold",
+      "--",
+      "python3",
+      helperPath,
+      "login"
+    ])
   }
 
   function openTresor(tresor) {

@@ -63,6 +63,34 @@ def run_cli(cli: str, arguments: Sequence[str]) -> tuple[int, str, str]:
     return completed.returncode, completed.stdout.strip(), completed.stderr.strip()
 
 
+def interactive_login(cli: str) -> int:
+    print("Tresorit CLI login")
+    print("1) Email and password")
+    print("2) Single sign-on (SSO)")
+    try:
+        method = input("Choose login method [1]: ").strip()
+        if method in ("", "1"):
+            email = input("Email: ").strip()
+            if not email:
+                print("An email address is required", file=sys.stderr)
+                return 2
+            command = [cli, "login", "--email", email, "--password-on-stdin"]
+        elif method == "2":
+            command = [cli, "login", "--sso"]
+        else:
+            print("Choose 1 or 2", file=sys.stderr)
+            return 2
+    except EOFError:
+        print("Login cancelled", file=sys.stderr)
+        return 2
+
+    try:
+        return subprocess.call(command)
+    except OSError as error:
+        print(error, file=sys.stderr)
+        return 127
+
+
 def tab_rows(raw: str, column_count: int) -> list[list[str]]:
     rows: list[list[str]] = []
     for line in raw.splitlines():
@@ -951,6 +979,7 @@ def argument_parser() -> argparse.ArgumentParser:
         default="status",
         choices=(
             "status",
+            "login",
             "start",
             "stop",
             "sync-start",
@@ -988,6 +1017,8 @@ def main() -> int:
             )
         )
         return 0
+    if arguments.action == "login":
+        return interactive_login(cli)
     return perform_action(
         cli,
         arguments.action,

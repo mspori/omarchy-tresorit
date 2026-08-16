@@ -250,7 +250,6 @@ Panel {
     if (!cursorActive) return
     if (focusSection === "header") {
       if (tresorit.installed) tresorit.toggleDaemon()
-      else tresorit.openApp()
     } else if (focusSection === "rows" && rowIndex < displayTresors.length) {
       activateTresorRow(displayTresors[rowIndex])
     } else if (focusSection === "files" && fileRowIndex < displayFiles.length) {
@@ -313,6 +312,12 @@ Panel {
     if (!tresor) return
     if (tresor.synced !== true && tresor.canStart !== true) chooseSyncFolder(tresor)
     else tresorit.toggleTresor(tresor)
+  }
+
+  function beginLogin() {
+    if (!tresorit.installed || !tresorit.running || tresorit.authenticated) return
+    root.close()
+    tresorit.login()
   }
 
   function clearPendingSync() {
@@ -487,8 +492,7 @@ Panel {
     }
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.RightButton) tresorit.refresh()
-      else if (buttonCode === Qt.MiddleButton) tresorit.openApp()
-      else root.toggle()
+      else if (buttonCode === Qt.LeftButton) root.toggle()
     }
   }
 
@@ -511,7 +515,7 @@ Panel {
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(text) {
         if (text === "r" || text === "R") tresorit.refresh()
-        else if (text === "o" || text === "O") tresorit.openApp()
+        else if (text === "l" || text === "L") root.beginLogin()
         else if ((text === "s" || text === "S") && root.cursorActive
                  && root.focusSection === "rows" && root.rowIndex < root.displayTresors.length)
           root.toggleOrChooseTresor(root.displayTresors[root.rowIndex])
@@ -639,7 +643,7 @@ Panel {
           }
 
           CursorSurface {
-            visible: !tresorit.installed || (tresorit.running && !tresorit.authenticated)
+            visible: tresorit.installed && tresorit.running && !tresorit.authenticated
             width: parent.width
             foreground: root.foreground
             implicitHeight: loginRow.implicitHeight + Style.space(12)
@@ -648,7 +652,7 @@ Panel {
               anchors.fill: parent
               hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
-              onClicked: tresorit.openApp()
+              onClicked: root.beginLogin()
             }
 
             RowLayout {
@@ -661,18 +665,18 @@ Panel {
               spacing: Style.space(8)
 
               Text {
-                text: tresorit.installed ? "Open Tresorit to sign in" : "Install or open Tresorit"
+                text: "Sign in with Tresorit CLI"
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body
                 Layout.fillWidth: true
               }
               PanelActionButton {
-                iconText: "󰐕"
-                tooltipText: "Open Tresorit"
+                iconText: "󰆍"
+                tooltipText: "Sign in from a terminal"
                 foreground: root.foreground
                 fontFamily: root.fontFamily
-                onClicked: tresorit.openApp()
+                onClicked: root.beginLogin()
               }
             }
           }

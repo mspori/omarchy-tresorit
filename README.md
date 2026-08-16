@@ -14,7 +14,7 @@ widget.
 - Group tresors into synced and not-synced sections.
 - Start or stop the Tresorit daemon.
 - Choose a local folder and start or stop synchronization for individual tresors.
-- Hand account management off to the Tresorit desktop application.
+- Sign in through the Tresorit CLI with password/TOTP or SSO.
 
 When a synced tresor is switched off, the plugin remembers its former local
 folder so it can safely be switched on again. For a cloud-only tresor, use the
@@ -40,7 +40,7 @@ omarchy plugin add file:///absolute/path/to/michaelspori.tresorit --enable
 ## Usage
 
 - Left-click the bar icon to open the panel.
-- Middle-click it to open Tresorit and right-click it to refresh status.
+- Right-click it to refresh status.
 - Click a synced or linked tresor to open its local folder. Click an unlinked
   cloud-only tresor—or one whose previous folder is unavailable—to choose its
   local sync folder.
@@ -58,7 +58,7 @@ omarchy plugin add file:///absolute/path/to/michaelspori.tresorit --enable
 
 The panel supports arrow-key navigation, Enter to open the selected tresor or file,
 `S` to change its sync selection, `F` to choose or change its local folder,
-`R` to refresh, and `O` to open Tresorit.
+`R` to refresh, and `L` to open the CLI login when signed out.
 
 Tresorit's CLI only reports files that are currently being processed; it does
 not provide completed-file history or completion timestamps. The plugin records

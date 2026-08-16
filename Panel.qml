@@ -79,8 +79,7 @@ Panel {
   function activateCursor() {
     if (!cursorActive) return
     if (focusSection === "header") {
-      if (!tresorit.authenticated) tresorit.openApp()
-      else if (tresorit.installed) tresorit.toggleDaemon()
+      if (tresorit.installed) tresorit.toggleDaemon()
       else tresorit.openApp()
     } else if (focusSection === "rows" && rowIndex < tresorit.tresors.length) {
       tresorit.openTresor(tresorit.tresors[rowIndex])
@@ -196,25 +195,12 @@ Panel {
           width: panelFlick.width
           spacing: Style.space(12)
 
-          CursorSurface {
+          Item {
             id: header
             width: parent.width
-            hasCursor: root.cursorActive && root.focusSection === "header"
-            foreground: root.foreground
             implicitHeight: hero.implicitHeight + Style.space(8)
-
-            MouseArea {
-              anchors.fill: parent
-              hoverEnabled: true
-              onEntered: root.setHeaderCursor()
-              onClicked: {
-                if (!tresorit.authenticated) tresorit.openApp()
-                else if (tresorit.installed) tresorit.toggleDaemon()
-                else tresorit.openApp()
-              }
-              Accessible.role: Accessible.Button
-              Accessible.name: tresorit.authenticated ? "Tresorit daemon control" : "Open Tresorit"
-            }
+            readonly property bool switchHasCursor: root.cursorActive
+              && root.focusSection === "header" && tresorit.installed
 
             PanelHero {
               id: hero
@@ -225,7 +211,6 @@ Panel {
               anchors.rightMargin: Style.space(4)
               title: "Tresorit"
               meta: root.heroMeta
-              detail: tresorit.authenticated ? String(tresorit.tresors.length) : ""
               foreground: root.foreground
               fontFamily: root.fontFamily
               iconOpacity: tresorit.active ? 1.0 : 0.55
@@ -237,7 +222,7 @@ Panel {
                   visible: tresorit.installed
                   checked: tresorit.active
                   busy: tresorit.busy
-                  hasCursor: header.hasCursor
+                  hasCursor: header.switchHasCursor
                   foreground: root.foreground
                   onHovered: function(on) { if (on) root.setHeaderCursor() }
                   onToggled: tresorit.toggleDaemon()

@@ -21,13 +21,20 @@ Panel {
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
-  readonly property color iconColor: tresorit.errors > 0
+  readonly property bool restricted: tresorit.restrictionState !== ""
+    && tresorit.restrictionState.toLowerCase() !== "normal"
+  readonly property color iconColor: tresorit.errors > 0 || restricted
+      ? urgent
+      : (tresorit.authenticated && tresorit.active ? foreground : dim)
+  readonly property color barIconColor: tresorit.errors > 0 || restricted
     ? urgent
-    : (tresorit.authenticated && tresorit.active ? foreground : dim)
+    : (tresorit.authenticated && tresorit.active ? barForeground : Qt.darker(barForeground, 1.55))
   readonly property string heroMeta: {
     if (!tresorit.installed) return "CLI not installed"
     if (!tresorit.running) return "Stopped"
     if (!tresorit.authenticated) return "Login required"
+    if (root.restricted) return tresorit.restrictionState
+    if (tresorit.lastError !== "") return "Status unavailable"
     return Model.transferSummary(tresorit.filesLeft, tresorit.errors)
   }
 
@@ -54,7 +61,11 @@ Panel {
   }
 
   function moveCursor(dx, dy) {
-    cursorActive = true
+    if (!cursorActive) {
+      cursorActive = true
+      ensureCursor()
+      return
+    }
     ensureCursor()
     if (dy === 0) return
     if (focusSection === "header") {
@@ -66,12 +77,13 @@ Panel {
   }
 
   function activateCursor() {
+    if (!cursorActive) return
     if (focusSection === "header") {
       if (!tresorit.authenticated) tresorit.openApp()
       else if (tresorit.installed) tresorit.toggleDaemon()
       else tresorit.openApp()
     } else if (focusSection === "rows" && rowIndex < tresorit.tresors.length) {
-      tresorit.toggleTresor(tresorit.tresors[rowIndex])
+      tresorit.openTresor(tresorit.tresors[rowIndex])
     }
   }
 
@@ -91,6 +103,8 @@ Panel {
 
   onOpenedChanged: if (opened) {
     cursorActive = false
+    focusSection = "header"
+    rowIndex = 0
     if (panelFlick) panelFlick.contentY = 0
     tresorit.refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
@@ -116,8 +130,8 @@ Panel {
     function toggle(): void { root.toggle() }
     function refresh(): string { tresorit.refresh(); return "ok" }
     function status(): string { return tresorit.statusText }
-    function startSync(id: string): string { tresorit.runAction(["sync-start", id], "Starting tresor sync…", id, 1); return "ok" }
-    function stopSync(id: string): string { tresorit.runAction(["sync-stop", id], "Stopping tresor sync…", id, 0); return "ok" }
+    function startSync(id: string): string { return tresorit.requestTresorSync(id, true) }
+    function stopSync(id: string): string { return tresorit.requestTresorSync(id, false) }
   }
 
   BarIconButton {
@@ -129,7 +143,7 @@ Panel {
         TresoritIcon {
           anchors.centerIn: parent
           iconSize: Style.space(12)
-          color: root.iconColor
+          color: root.barIconColor
           opacity: tresorit.active ? 1.0 : 0.6
         }
       }
@@ -161,6 +175,9 @@ Panel {
       onTextKey: function(text) {
         if (text === "r" || text === "R") tresorit.refresh()
         else if (text === "o" || text === "O") tresorit.openApp()
+        else if ((text === "s" || text === "S") && root.cursorActive
+                 && root.focusSection === "rows" && root.rowIndex < tresorit.tresors.length)
+          tresorit.toggleTresor(tresorit.tresors[root.rowIndex])
       }
 
       Flickable {
@@ -195,6 +212,8 @@ Panel {
                 else if (tresorit.installed) tresorit.toggleDaemon()
                 else tresorit.openApp()
               }
+              Accessible.role: Accessible.Button
+              Accessible.name: tresorit.authenticated ? "Tresorit daemon control" : "Open Tresorit"
             }
 
             PanelHero {
@@ -222,6 +241,8 @@ Panel {
                   foreground: root.foreground
                   onHovered: function(on) { if (on) root.setHeaderCursor() }
                   onToggled: tresorit.toggleDaemon()
+                  Accessible.role: Accessible.CheckBox
+                  Accessible.name: "Tresorit daemon running"
                   PanelToolTip {
                     visible: parent.containsMouse
                     text: tresorit.active ? "Stop Tresorit" : "Start Tresorit"
@@ -391,15 +412,19 @@ Panel {
         checked: tresorRow.synced
         busy: tresorit.tresorIsBusy(tresorRow.tresor)
         enabled: tresorit.tresorCanToggle(tresorRow.tresor)
-        hasCursor: tresorRow.hasCursor
+        hasCursor: false
         foreground: root.foreground
         Layout.alignment: Qt.AlignVCenter
         onHovered: function(on) { if (on) root.setRowCursor(tresorRow.rowNumber) }
         onToggled: tresorit.toggleTresor(tresorRow.tresor)
+        Accessible.role: Accessible.CheckBox
+        Accessible.name: "Sync " + String((tresorRow.tresor && tresorRow.tresor.name) || "tresor")
         PanelToolTip {
           visible: parent.containsMouse
           text: tresorRow.synced
-            ? "Stop syncing this tresor"
+            ? (tresorRow.tresor && tresorRow.tresor.canStop
+              ? "Stop syncing this tresor"
+              : "Sync folder state is unavailable")
             : (tresorRow.tresor && tresorRow.tresor.canStart
               ? "Resume syncing to its previous folder"
               : "Choose a sync folder in Tresorit first")

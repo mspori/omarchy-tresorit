@@ -1,6 +1,10 @@
 import importlib.util
+import io
+import tempfile
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
+from unittest import mock
 
 
 SPEC = importlib.util.spec_from_file_location(
@@ -43,6 +47,12 @@ class ParseStatusTests(unittest.TestCase):
 
         self.assertEqual(parsed["statusText"], "Read only")
 
+    def test_missing_required_fields_are_rejected(self):
+        for raw in ("", "Restriction state:\tNormal\n", "Tresorit daemon:\trunning\n"):
+            with self.subTest(raw=raw):
+                with self.assertRaises(ValueError):
+                    status.parse_status(raw)
+
 
 class ParseTresorsTests(unittest.TestCase):
     def test_synced_and_unsynced_rows(self):
@@ -62,6 +72,32 @@ class ParseTresorsTests(unittest.TestCase):
         rows = status.parse_tresors("Archive\t-\tOwner Two\n", {"Archive": "/old/path"})
 
         self.assertTrue(rows[0]["canStart"])
+
+    def test_duplicate_names_use_postfixed_ids(self):
+        rows = status.parse_tresors(
+            "Projects (alpha-id)\t/home/me/one\tOwner One\n"
+            "Projects (beta-id)\t-\tOwner One\n"
+            "Budget (2026)\t-\tOwner One\n"
+        )
+
+        self.assertEqual(rows[0]["id"], "alpha-id")
+        self.assertEqual(rows[0]["name"], "Projects")
+        self.assertEqual(rows[1]["id"], "beta-id")
+        self.assertEqual(rows[2]["id"], "Budget (2026)")
+
+    def test_duplicate_transfer_rows_merge_by_raw_name(self):
+        tresors = status.parse_tresors(
+            "Projects (alpha-id)\t/home/me/one\tOwner One\n"
+            "Projects (beta-id)\t/home/me/two\tOwner One\n"
+        )
+        transfers = status.parse_transfers(
+            "Projects (alpha-id)\tsyncing\t2\t0\n"
+            "Projects (beta-id)\tidle\t0\t1\n"
+        )
+
+        merged = status.merge_transfers(tresors, transfers)
+        self.assertEqual(merged[0]["filesLeft"], 2)
+        self.assertEqual(merged[1]["errors"], 1)
 
     def test_transfer_data_is_merged_by_name(self):
         tresors = status.parse_tresors(
@@ -93,6 +129,90 @@ class ActionValidationTests(unittest.TestCase):
             with self.subTest(value=value):
                 with self.assertRaises(ValueError):
                     status.valid_target(value)
+
+    def test_sync_start_uses_scoped_remembered_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            row = {"id": "folder-id", "synced": False, "syncPath": ""}
+            context = ([row], {"folder-id": str(path)}, "account")
+            with mock.patch.object(status, "sync_context", return_value=context):
+                with mock.patch.object(status, "run_cli", return_value=(0, "", "")) as run:
+                    exit_code = status.perform_action("cli", "sync-start", "folder-id")
+
+        self.assertEqual(exit_code, 0)
+        run.assert_called_once_with(
+            "cli", ["sync", "--start", "folder-id", "--path", str(path)]
+        )
+
+    def test_sync_stop_requires_durable_current_path(self):
+        row = {"id": "folder-id", "synced": True, "syncPath": "/current"}
+        with mock.patch.object(
+            status, "sync_context", return_value=([row], {}, "account")
+        ):
+            errors = io.StringIO()
+            with redirect_stderr(errors):
+                exit_code = status.perform_action("cli", "sync-stop", "folder-id")
+
+        self.assertEqual(exit_code, 2)
+        self.assertIn("safely remembered", errors.getvalue())
+
+
+class StateTests(unittest.TestCase):
+    def test_paths_are_scoped_by_hashed_account(self):
+        state = status.empty_state()
+        status.set_remembered_paths(state, "one@example.test", {"id": "/one"})
+        status.set_remembered_paths(state, "two@example.test", {"id": "/two"})
+
+        self.assertEqual(
+            status.remembered_paths(state, "one@example.test"), {"id": "/one"}
+        )
+        self.assertEqual(
+            status.remembered_paths(state, "two@example.test"), {"id": "/two"}
+        )
+        self.assertNotIn("one@example.test", str(state))
+
+    def test_state_round_trip_is_private_and_versioned(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state_file = Path(directory) / "plugin" / "sync-paths.json"
+            with mock.patch.object(status, "STATE_FILE", state_file):
+                state = status.empty_state()
+                status.set_remembered_paths(state, "person@example.test", {"id": "/sync"})
+                with status.state_lock():
+                    status.save_state(state)
+                    loaded = status.load_state()
+
+                self.assertEqual(
+                    status.remembered_paths(loaded, "person@example.test"),
+                    {"id": "/sync"},
+                )
+                self.assertEqual(state_file.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(state_file.parent.stat().st_mode & 0o777, 0o700)
+
+
+class CollectionTests(unittest.TestCase):
+    def test_transfer_failure_is_degraded_not_healthy(self):
+        outputs = {
+            ("-p", "status"): (
+                0,
+                "Tresorit daemon:\trunning\n"
+                "Logged in as:\tperson@example.test\n"
+                "Restriction state:\tNormal",
+                "",
+            ),
+            ("-p", "tresors"): (0, "Projects\t/sync/Projects\tOwner", ""),
+            ("-p", "transfers"): (1, "Error code:\tUnavailable", ""),
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            state_file = Path(directory) / "plugin" / "sync-paths.json"
+            with mock.patch.object(status, "STATE_FILE", state_file):
+                read = lambda _cli, args: outputs[tuple(args)]
+                with mock.patch.object(status, "run_cli", side_effect=read):
+                    result = status.collect_status("cli")
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["snapshotValid"])
+        self.assertIn("Unavailable", result["lastError"])
 
 
 if __name__ == "__main__":

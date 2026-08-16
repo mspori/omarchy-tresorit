@@ -64,8 +64,9 @@ Item {
 
   function applyStatus(raw) {
     var parsed = Model.parseStatus(raw)
-    if (!parsed.ok && parsed.lastError) lastError = String(parsed.lastError)
+    if (parsed.lastError) lastError = String(parsed.lastError)
     else if (actionProcess.running === false) lastError = ""
+    if (parsed.snapshotValid === false) return
 
     installed = parsed.installed === true
     running = parsed.running === true
@@ -91,7 +92,7 @@ Item {
   }
 
   function runAction(arguments, label, tresorId, desired) {
-    if (!installed || actionProcess.running || helperPath === "") return
+    if (!installed || actionProcess.running || helperPath === "") return false
     _actionOutput = ""
     _actionError = ""
     actionStatus = label || ""
@@ -99,9 +100,11 @@ Item {
     desiredTresorSync = desired === undefined ? -1 : desired
     actionProcess.command = ["python3", helperPath].concat(arguments)
     actionProcess.running = true
+    return true
   }
 
   function toggleDaemon() {
+    if (!installed || busy) return
     if (active) {
       desiredRunning = 0
       runAction(["stop"], "Stopping Tresorit…", "", -1)
@@ -112,22 +115,45 @@ Item {
   }
 
   function toggleTresor(tresor) {
-    if (!tresor || actionProcess.running || !running) return
-    var id = String(tresor.id || tresor.name || "")
-    if (id === "") return
-    var enable = tresor.synced !== true
-    if (enable && tresor.canStart !== true) {
-      lastError = "Choose a local sync folder in the Tresorit app first"
-      actionStatus = lastError
-      statusClearTimer.restart()
-      return
+    if (!tresor) return "invalid-target"
+    return requestTresorSync(String(tresor.id || tresor.name || ""), tresor.synced !== true)
+  }
+
+  function findTresor(id) {
+    var target = String(id || "")
+    for (var i = 0; i < tresors.length; i++) {
+      if (String(tresors[i].id || "") === target) return tresors[i]
     }
-    runAction(
-      [enable ? "sync-start" : "sync-stop", id],
+    return null
+  }
+
+  function rejectAction(message, code) {
+    lastError = ""
+    actionStatus = message
+    statusClearTimer.restart()
+    return code
+  }
+
+  function requestTresorSync(id, enable) {
+    if (!installed) return "not-installed"
+    if (actionProcess.running) return "busy"
+    if (!running) return "daemon-stopped"
+    var tresor = findTresor(id)
+    if (!tresor) return "invalid-target"
+    if (tresor.synced === enable) return "unchanged"
+    if (enable && tresor.canStart !== true)
+      return rejectAction("Choose a local sync folder in the Tresorit app first", "needs-folder")
+    if (!enable && tresor.canStop !== true)
+      return rejectAction("The current sync folder could not be safely remembered", "state-unavailable")
+    var targetId = String(tresor.id || tresor.name || "")
+    if (targetId === "") return "invalid-target"
+    var launched = runAction(
+      [enable ? "sync-start" : "sync-stop", targetId],
       enable ? "Starting tresor sync…" : "Stopping tresor sync…",
-      id,
+      targetId,
       enable ? 1 : 0
     )
+    return launched ? "queued" : "busy"
   }
 
   function clearTresorAction() {
@@ -148,7 +174,8 @@ Item {
   }
 
   function tresorCanToggle(tresor) {
-    return running && tresor && (tresor.synced === true || tresor.canStart === true)
+    if (!running || !tresor) return false
+    return tresor.synced === true ? tresor.canStop === true : tresor.canStart === true
   }
 
   function openApp() {

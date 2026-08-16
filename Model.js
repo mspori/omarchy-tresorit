@@ -1,6 +1,7 @@
 function defaultStatus() {
   return {
     ok: true,
+    snapshotValid: false,
     installed: false,
     running: false,
     authenticated: false,
@@ -48,7 +49,7 @@ function tresorMeta(tresor) {
   if (tresor.synced !== true) return "Not synced on this device"
   var state = String(tresor.status || "").trim()
   if (state !== "" && state.toLowerCase() !== "idle") return state
-  return String(tresor.syncPath || "Synced")
+  return "Synced on this device"
 }
 
 if (typeof module !== "undefined") {
@@ -59,4 +60,3 @@ if (typeof module !== "undefined") {
     tresorMeta: tresorMeta
   }
 }
-

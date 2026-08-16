@@ -4,12 +4,17 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
+import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Sequence
 
@@ -18,6 +23,8 @@ COMMAND_TIMEOUT_SECONDS = 5
 DEFAULT_CLI_PATH = Path.home() / ".local" / "share" / "tresorit" / "tresorit-cli"
 STATE_HOME = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
 STATE_FILE = STATE_HOME / "omarchy" / "michaelspori.tresorit" / "sync-paths.json"
+STATE_VERSION = 1
+DISAMBIGUATED_NAME = re.compile(r"^(?P<name>.+) \((?P<id>[^()]+)\)$")
 
 
 def find_cli() -> str | None:
@@ -50,28 +57,37 @@ def run_cli(cli: str, arguments: Sequence[str]) -> tuple[int, str, str]:
     return completed.returncode, completed.stdout.strip(), completed.stderr.strip()
 
 
-def tab_rows(raw: str, minimum_columns: int) -> list[list[str]]:
+def tab_rows(raw: str, column_count: int) -> list[list[str]]:
     rows: list[list[str]] = []
     for line in raw.splitlines():
         if not line.strip():
             continue
         columns = [value.strip() for value in line.split("\t")]
-        if len(columns) >= minimum_columns:
+        if len(columns) == column_count:
             rows.append(columns)
     return rows
 
 
 def parse_status(raw: str) -> dict[str, object]:
-    fields = {
-        columns[0].rstrip(":").strip().lower(): columns[1].strip()
-        for columns in tab_rows(raw, 2)
-    }
-    daemon_state = fields.get("tresorit daemon", "unknown")
-    account = fields.get("logged in as", "")
+    fields: dict[str, str] = {}
+    for line in raw.splitlines():
+        label, separator, value = line.partition("\t")
+        if separator:
+            fields[label.rstrip(":").strip().lower()] = value.strip()
+
+    if "tresorit daemon" not in fields or "logged in as" not in fields:
+        raise ValueError("Tresorit status output is missing required fields")
+
+    daemon_state = fields["tresorit daemon"]
+    daemon_normalized = daemon_state.lower()
+    if daemon_normalized not in ("running", "stopped", "not running"):
+        raise ValueError("Tresorit status output contains an unknown daemon state")
+
+    account = fields["logged in as"]
     restriction = fields.get("restriction state", "")
     drive_mount_path = fields.get("drive mount path", "")
     authenticated = account not in ("", "-")
-    running = daemon_state.lower() == "running"
+    running = daemon_normalized == "running"
 
     if not running:
         status_text = "Stopped"
@@ -96,50 +112,121 @@ def parse_tresors(
     raw: str, remembered_paths: dict[str, str] | None = None
 ) -> list[dict[str, object]]:
     remembered_paths = remembered_paths or {}
+    source_rows = tab_rows(raw, 3)
+    candidates = [DISAMBIGUATED_NAME.match(columns[0]) for columns in source_rows]
+    candidate_counts: dict[str, int] = {}
+    for candidate in candidates:
+        if candidate:
+            base_name = candidate.group("name")
+            candidate_counts[base_name] = candidate_counts.get(base_name, 0) + 1
+
     tresors: list[dict[str, object]] = []
-    for columns in tab_rows(raw, 3):
-        name, sync_path, owner = columns[:3]
-        if not name:
+    for columns, candidate in zip(source_rows, candidates):
+        raw_name, sync_path, owner = columns
+        if not raw_name:
             continue
+        is_duplicate = (
+            candidate is not None
+            and candidate_counts.get(candidate.group("name"), 0) > 1
+        )
+        name = candidate.group("name") if is_duplicate else raw_name
+        identifier = candidate.group("id") if is_duplicate else raw_name
         synced = sync_path not in ("", "-")
         tresors.append(
             {
-                "id": name,
+                "id": identifier,
                 "name": name,
+                "rawName": raw_name,
                 "syncPath": sync_path if synced else "",
                 "owner": owner if owner != "-" else "",
                 "synced": synced,
                 "status": "",
                 "filesLeft": 0,
                 "errors": 0,
-                "canStart": synced or name in remembered_paths,
+                "canStart": synced or identifier in remembered_paths,
+                "canStop": synced and remembered_paths.get(identifier) == sync_path,
             }
         )
     return tresors
 
 
-def load_remembered_paths() -> dict[str, str]:
+def account_key(account: str) -> str:
+    normalized = account.strip().casefold().encode("utf-8")
+    return hashlib.sha256(normalized).hexdigest()
+
+
+def empty_state() -> dict[str, object]:
+    return {"version": STATE_VERSION, "accounts": {}}
+
+
+def prepare_state_directory() -> None:
+    STATE_FILE.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    STATE_FILE.parent.chmod(0o700)
+
+
+@contextmanager
+def state_lock():
+    prepare_state_directory()
+    lock_path = STATE_FILE.with_suffix(".lock")
+    descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        os.chmod(lock_path, 0o600)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
+def load_state() -> dict[str, object]:
+    if STATE_FILE.is_symlink():
+        return empty_state()
     try:
         data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {}
-    if not isinstance(data, dict):
+        return empty_state()
+    if not isinstance(data, dict) or data.get("version") != STATE_VERSION:
+        return empty_state()
+    accounts = data.get("accounts")
+    if not isinstance(accounts, dict):
+        return empty_state()
+    return data
+
+
+def remembered_paths(state: dict[str, object], account: str) -> dict[str, str]:
+    accounts = state.get("accounts", {})
+    raw_paths = accounts.get(account_key(account), {}) if isinstance(accounts, dict) else {}
+    if not isinstance(raw_paths, dict):
         return {}
     return {
-        str(key): str(value)
-        for key, value in data.items()
-        if isinstance(key, str) and isinstance(value, str) and Path(value).is_absolute()
+        str(identifier): str(path)
+        for identifier, path in raw_paths.items()
+        if isinstance(identifier, str)
+        and isinstance(path, str)
+        and Path(path).is_absolute()
     }
 
 
-def save_remembered_paths(paths: dict[str, str]) -> None:
-    STATE_FILE.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    temporary = STATE_FILE.with_suffix(".tmp")
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+def set_remembered_paths(state: dict[str, object], account: str, paths: dict[str, str]) -> None:
+    accounts = state.setdefault("accounts", {})
+    if not isinstance(accounts, dict):
+        accounts = {}
+        state["accounts"] = accounts
+    accounts[account_key(account)] = paths
+
+
+def save_state(state: dict[str, object]) -> None:
+    prepare_state_directory()
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=".sync-paths.", suffix=".tmp", dir=STATE_FILE.parent
+    )
+    temporary = Path(temporary_name)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(paths, handle, ensure_ascii=False, indent=2, sort_keys=True)
+            json.dump(state, handle, ensure_ascii=False, indent=2, sort_keys=True)
             handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(temporary, STATE_FILE)
         STATE_FILE.chmod(0o600)
     except Exception:
@@ -174,7 +261,7 @@ def merge_transfers(
     tresors: list[dict[str, object]], transfers: dict[str, dict[str, object]]
 ) -> list[dict[str, object]]:
     for tresor in tresors:
-        transfer = transfers.get(str(tresor["name"]))
+        transfer = transfers.get(str(tresor["rawName"])) or transfers.get(str(tresor["name"]))
         if transfer:
             tresor.update(transfer)
         elif tresor["synced"]:
@@ -185,6 +272,7 @@ def merge_transfers(
 def unavailable_status(message: str = "Tresorit CLI is not installed") -> dict[str, object]:
     return {
         "ok": True,
+        "snapshotValid": True,
         "installed": False,
         "running": False,
         "authenticated": False,
@@ -204,11 +292,19 @@ def collect_status(cli: str) -> dict[str, object]:
         result = unavailable_status("Tresorit is unavailable")
         result["installed"] = True
         result["ok"] = False
+        result["snapshotValid"] = False
         result["lastError"] = status_error or status_output or "Could not read Tresorit status"
         return result
 
     result = unavailable_status()
-    result.update(parse_status(status_output))
+    try:
+        result.update(parse_status(status_output))
+    except ValueError as error:
+        result["installed"] = True
+        result["ok"] = False
+        result["snapshotValid"] = False
+        result["lastError"] = str(error)
+        return result
     result["installed"] = True
 
     if not result["running"] or not result["authenticated"]:
@@ -222,27 +318,50 @@ def collect_status(cli: str) -> dict[str, object]:
 
     if tresors_exit != 0:
         result["ok"] = False
+        result["snapshotValid"] = False
         result["lastError"] = tresors_error or tresors_output or "Could not list tresors"
         return result
 
-    remembered_paths = load_remembered_paths()
-    tresors = parse_tresors(tresors_output, remembered_paths)
-    observed_paths = {
-        str(row["id"]): str(row["syncPath"])
-        for row in tresors
-        if row["synced"] and row["syncPath"]
-    }
-    next_paths = {**remembered_paths, **observed_paths}
-    if next_paths != remembered_paths:
-        try:
-            save_remembered_paths(next_paths)
-        except OSError:
-            pass
+    account = str(result["account"])
+    state_error = ""
+    with state_lock():
+        state = load_state()
+        account_paths = remembered_paths(state, account)
+        tresors = parse_tresors(tresors_output, account_paths)
+        known_ids = {str(row["id"]) for row in tresors}
+        next_paths = {
+            identifier: path
+            for identifier, path in account_paths.items()
+            if identifier in known_ids
+        }
+        next_paths.update(
+            {
+                str(row["id"]): str(row["syncPath"])
+                for row in tresors
+                if row["synced"] and row["syncPath"]
+            }
+        )
+        if next_paths != account_paths:
+            set_remembered_paths(state, account, next_paths)
+            try:
+                save_state(state)
+            except OSError as error:
+                state_error = f"Could not safely remember sync folders: {error.strerror or error}"
+        if not state_error:
+            for row in tresors:
+                identifier = str(row["id"])
+                row["canStart"] = row["synced"] or identifier in next_paths
+                row["canStop"] = row["synced"] and next_paths.get(identifier) == row["syncPath"]
+
     transfers = parse_transfers(transfers_output) if transfers_exit == 0 else {}
     result["tresors"] = merge_transfers(tresors, transfers)
     result["filesLeft"] = sum(int(row["filesLeft"]) for row in result["tresors"])
     result["errors"] = sum(int(row["errors"]) for row in result["tresors"])
-    if transfers_exit != 0:
+    if state_error:
+        result["ok"] = False
+        result["lastError"] = state_error
+    elif transfers_exit != 0:
+        result["ok"] = False
         result["lastError"] = transfers_error or transfers_output or "Could not read transfers"
     return result
 
@@ -252,6 +371,27 @@ def valid_target(value: str) -> str:
     if not target or "\0" in target or "\n" in target or "\r" in target:
         raise ValueError("Invalid tresor name or id")
     return target
+
+
+def sync_context(cli: str) -> tuple[list[dict[str, object]], dict[str, str], str]:
+    status_exit, status_output, status_error = run_cli(cli, ["-p", "status"])
+    if status_exit != 0:
+        raise ValueError(status_error or status_output or "Could not read Tresorit status")
+    try:
+        current = parse_status(status_output)
+    except ValueError as error:
+        raise ValueError(str(error)) from error
+    if not current["running"] or not current["authenticated"]:
+        raise ValueError("Tresorit must be running and authenticated")
+
+    tresors_exit, tresors_output, tresors_error = run_cli(cli, ["-p", "tresors"])
+    if tresors_exit != 0:
+        raise ValueError(tresors_error or tresors_output or "Could not list tresors")
+
+    account = str(current["account"])
+    with state_lock():
+        paths = remembered_paths(load_state(), account)
+    return parse_tresors(tresors_output, paths), paths, account
 
 
 def perform_action(cli: str, action: str, target: str | None) -> int:
@@ -268,10 +408,24 @@ def perform_action(cli: str, action: str, target: str | None) -> int:
         except ValueError as error:
             print(error, file=sys.stderr)
             return 2
+        try:
+            tresors, account_paths, _account = sync_context(cli)
+        except ValueError as error:
+            print(error, file=sys.stderr)
+            return 2
+        tresor = next((row for row in tresors if row["id"] == safe_target), None)
+        if tresor is None:
+            print("The requested tresor is not available", file=sys.stderr)
+            return 2
         if action == "sync-start":
-            sync_path = load_remembered_paths().get(safe_target, "")
+            sync_path = account_paths.get(safe_target, "")
             path = Path(sync_path)
-            if not sync_path or not path.is_absolute() or not path.is_dir() or not os.access(path, os.W_OK):
+            if (
+                not sync_path
+                or not path.is_absolute()
+                or not path.is_dir()
+                or not os.access(path, os.W_OK)
+            ):
                 print(
                     "No usable previous sync folder is known; choose a folder in the Tresorit app",
                     file=sys.stderr,
@@ -279,6 +433,13 @@ def perform_action(cli: str, action: str, target: str | None) -> int:
                 return 2
             command = ["sync", "--start", safe_target, "--path", sync_path]
         else:
+            sync_path = account_paths.get(safe_target, "")
+            if not tresor["synced"] or not sync_path or sync_path != tresor["syncPath"]:
+                print(
+                    "Sync cannot be stopped until its current folder is safely remembered",
+                    file=sys.stderr,
+                )
+                return 2
             command = ["sync", "--stop", safe_target]
     else:
         command = commands[action]

@@ -4,7 +4,7 @@ An Omarchy Shell bar plugin for monitoring and controlling the Tresorit Linux
 client. It is designed as a Tresorit counterpart to Omarchy's built-in Dropbox
 widget.
 
-## Planned first release
+## Features
 
 - Show whether Tresorit is installed, running, and authenticated.
 - Display current transfer activity and sync errors.
@@ -18,6 +18,52 @@ folder so it can safely be switched on again. Cloud-only tresors without a
 known local folder must first be configured in Tresorit; the plugin never
 guesses a sync destination.
 
+## Installation
+
+Install the plugin from its Git repository and enable it in the bar:
+
+```bash
+omarchy plugin add <git-url> --enable
+```
+
+Omarchy asks for confirmation because shell plugins run as unsandboxed user
+code. Review the repository before enabling it.
+
+For local development, a Git checkout can be installed with a file URL:
+
+```bash
+omarchy plugin add file:///absolute/path/to/michaelspori.tresorit --enable
+```
+
+## Usage
+
+- Left-click the bar icon to open the panel.
+- Middle-click it to open Tresorit and right-click it to refresh status.
+- Click a tresor name to open its local folder, or Tresorit when it has no
+  local folder.
+- Use the trailing switch to turn synchronization for that tresor on or off.
+- Use the header switch to start or stop the Tresorit daemon. This interrupts
+  all Tresorit synchronization and Tresorit Drive; it is separate from the
+  per-tresor switches.
+
+The panel supports arrow-key navigation, Enter to open the selected tresor,
+`S` to change its sync selection, `R` to refresh, and `O` to open Tresorit.
+
+### Sync-folder safety
+
+Tresorit requires an explicit local folder when synchronization is enabled.
+The plugin stores folders it has already observed in:
+
+```text
+${XDG_STATE_HOME:-~/.local/state}/omarchy/michaelspori.tresorit/sync-paths.json
+```
+
+The state directory and file are user-private. Account addresses are stored as
+one-way hashes, and paths are scoped by that account and a stable tresor
+identifier. A remembered folder must still
+exist and be writable before the plugin will pass it back to Tresorit. Selecting
+a local folder for a cloud-only tresor remains a task for the Tresorit app.
+
 ## Requirements
 
 - Omarchy with the Quickshell-based Omarchy Shell plugin system.
@@ -26,13 +72,17 @@ guesses a sync destination.
 
 ## Development
 
-Validate the plugin without installing it:
+Run the parser/model tests and Omarchy validator:
 
 ```bash
+python3 -m unittest discover -s tests -v
+node tests/test_model.js
 omarchy plugin validate .
 ```
 
-The plugin is under active development and is not ready to install yet.
+The helper calls the CLI with argument arrays rather than shell commands. Tests
+and bug reports should never include raw CLI output: it can contain account
+addresses, tresor names, owners, and local paths.
 
 ## License
 
